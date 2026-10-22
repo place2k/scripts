@@ -1,0 +1,16 @@
+#!/usr/bin/bash
+
+if [[ $1 == -h || $1 == --help ]]; then
+  echo "$(basename $0) [-h|-b|--help|--both]"
+  echo "-h, --help   Show this message and exit."
+  echo "-b, --both   Clear both the build directory and Pacman's cache, not only the former."
+  exit
+fi
+
+# .aur-build is now the CloneDir
+#rm -rf $HOME/.cache/paru/clone/* && \
+
+rm -rf $HOME/.aur/* && [[ $1 == -b || $1 == --both ]] && paru -Scd --noconfirm &>/dev/null
+
+exit 0
+

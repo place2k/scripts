@@ -1,0 +1,1618 @@
+#!/usr/bin/bash
+
+# =========================== ARGUMENTLESS COMMANDS ===========================
+
+spt_usage() {
+  echo "spt $SPT_VERSION — Scripts Manager"
+  echo
+
+  echo "USAGE"
+  echo "  $SPT_THIS [help|usage|version]"
+  echo "  $SPT_THIS [list|enumgen|sync|perms|help|config]"
+  echo "  $SPT_THIS list [scriptname pattern]"
+  echo "  $SPT_THIS [edit|del|view|enum] [script identifier] ..."
+  echo "  $SPT_THIS enum ... [script number range]           ..."
+  echo "  $SPT_THIS rename   [script identifier] [new name]  ..."
+  echo "  $SPT_THIS link     [script identifier] [link name] ..."
+  echo "  $SPT_THIS config   -l | [section/]name[=value]     ..."
+  echo "  $SPT_THIS config [option...] [section/]name=value... -- [command] [argument...]"
+}
+
+help_text() {
+  [[ $1 == -e ]] && spt_error --up 2 "$2"
+
+  spt_usage
+  test -n ${SPTCFG[editor/gui]} && local GUI_EDITOR="($_) "
+  printf '\n\nCOMMANDS\n\n'
+
+  echo 'edit (edit or create script files):'
+  echo '  -c, --cli         use the CLI text editor, overriding any configuration that says otherwise'
+  echo "  -g, --gui         use the graphical text editor ${GUI_EDITOR}instead of the CLI one (${SPTCFG[editor/cli]})"
+  echo '  -f, --first       select for editing the first pattern-matched file only'
+  echo '  -l, --last        select the last file only'
+  echo '  -a, --all         select for editing all pattern-matched files'
+  echo '  -L, --line LINE   open file at the specified line, or at the beginning (line 1) if no line is given'
+  echo '  -b, --bang ARGS   use the given interpreter (and its arguments, if any; all in one string) on the shebang line for new files'
+  echo '  -B, --nobang      do not automatically insert a shebang line in new files'
+  echo 'del (delete one or more [or all] script files):'
+  echo '  -y, --yes         delete the given script(s) immediately, without asking for confirmation; ignored when `all` is given as script'
+  echo '  -c, --confirm     prompt the user for confirmation before deleting each and every script'
+  echo '  -o, --ask-once    prompt the user for confirmation only once before deleting the given script(s)'
+  echo 'view (view the code of one or more [or all] scripts):'
+  echo '  -L, --least       use cat(1) instead of bat(1) to view the script source code'
+  echo '  -l, --less        use less(1) instead of bat(1) to view the script source code'
+  echo '  -m, --more        use bat(1), without line numbers or paging, to view the script source code'
+  echo '  -M, --most        use bat(1) to view the script source code'
+  echo 'list (list script files):'
+  echo '  -s, --scripts     list the original scripts files instead of the backup ones'
+  echo '  -b, --backup      list the script backup files instead of the original ones'
+  echo '  -B, --both        list both original and backup script files'
+  echo '  -n, --name        sort script files by name; show relative dates'
+  echo '  -d, --adate       sort script files by date; show absolute dates'
+  echo '  -D, --rdate       sort script files by date; show relative dates'
+  echo 'link (create a scriptname that is a symbolic link to a scriptfile):'
+  echo '  -f, --force       create a link even if one already exists to the given scriptfile'
+  echo '  -o, --onelink     do not create a link if a scriptfile already has one'
+  echo '  -s, --symbolic    create/delete symbolic links only'
+  echo '  -l, --hard        create/delete hard links only'
+  echo '  -c, --chain       allow creation of symbolic links to symbolic links'
+  echo '  -C, --no-chain    do not create a symbolic link to a scriptname if it is a symbolic link itself'
+  echo '  -u, --unlink      delete one or more links; unlike `del`, this will delete neither the target nor all associated links at once'
+  echo 'config (list mode: print every valid configuration name):'
+  echo '  -l, --list        print all the valid configuration names in a section/name format, then exit; with -F/--full, print also the =value'
+  echo '  -F, --full        print the =value too when listing with -l/--list'
+  echo 'config (get/set mode: read/write configuration value[s]):'
+  echo '  -m, --match       get or set the value of every configuration whose name (and/or section) matches the given one'
+  echo '  -f, --fail        exit with error (do not persist, nor execute a command line) if the given configuration name does not exist'
+  echo '  -F, --full        (get mode only) print in full format (section/name=value), rather than printing only the value'
+  echo "  -p, --persist     (write mode only) persist modified configuration to storage, writing it to $SPTCFG_FILE"
+  echo 'config (reset mode: restore original configuration):'
+  echo "  -d, --default     load default configuration (and save it to $SPTCFG_FILE if -p/--persist is used)"
+  echo '  -p, --persist     persist reset configuration to storage'
+  echo '  -r, --restore     restore the original (or factory) contents of the configuration file'
+  echo
+  echo 'Options may be passed either apart (-a -b) or together (-ab), and anywhere on the command line, before and after a command'\''s arguments (if any).'
+  echo 'Option arguments may be passed after the option (--opt arg) or together with it (--opt=arg or -oarg), including after other options (-mno=arg, but not -mnoarg).'
+  echo 'If a double-dash (--) argument is present on the command line, all the following arguments, even dashed ones, will be taken as non-option args.'
+  echo 'To view the valid options of any command at any time, pass -h or --help to it.'
+  echo
+
+  local example_name=$SPT_ENUM_EMPTY example_namepart example_number
+  local exname_str exnpart_str exnum_str
+  if ! $SPT_NOSCRIPTS; then
+    while [[ $example_name == $SPT_ENUM_EMPTY ]]; do
+      example_number=$(( RANDOM % SPT_ENUM_MAX ))
+      example_name=${SPT_ENUM_SCRIPTS[$example_number]}
+    done
+    example_namepart=${example_name:0:2}
+    exname_str=" (such as $example_name)" exnpart_str=" ($example_namepart)" exnum_str=" ($example_number)"
+  fi
+
+  echo "If no command is given, the usage message above is printed."
+  echo "A script identifier is a name$exname_str, part of a name$exnpart_str, or a number$exnum_str that represents the script to act upon."
+  echo "Use the \`enum\` command to see which numbers correspond to which scripts. Use \`enumgen\` to (re)create the mapping at $SPT_ENUM_FILE."
+  echo "Enums generation is run automatically when $SPT_THIS notices the enums file is empty or does not exist."
+  echo "With no script identifier argument, \`$SPT_THIS\` is assumed."
+  echo "If a scriptname pattern is given to \`list\`, the list will contain only those filenames of which the given pattern is a substring."
+  echo
+
+  echo "If the keyword \`all\` (without quotes; case sensitive) is given to \`edit\`, \`del\` or \`view\`, the respective action is done to all script files."
+  echo "As that word is case-sensitive, scriptnames such as \`All\` and \`ALL\` (as well as \`all.sh\`) can be used without conflict."
+  echo "The scripts-manager script $SPT_THIS cannot be deleted with \`del\`. It will not delete itself, not even when the \`all\` keyword is used."
+  echo "If only one argument is given to \`rename\`, that will be the new name of the $SPT_THIS script."
+  echo "If the name given to \`link\` or to \`rename\` matches more than one file, a warning is printed and the user is prompted to select one of files."
+  echo
+
+  echo "The \`enum\` command shows the number mapped to a scriptfile, and vice-versa."
+  echo "If one argument is given to it, \`enum\` shows the number or scriptfile associated with that argument."
+  echo "If \`enum\` is given no arguments, it shows an enumerated list of all script files; with two or more arguments, it lists them and their mapped values."
+  echo "If, among the arguments to \`enum\`, a script-number range is given, the scripts corresponding to the numbers within the range are printed."
+  echo "A range is of the format A-B, where A and B (both inclusive) are script numbers."
+  echo "A and B can be any value between 0 and $SPT_ENUM_MAX, in either order (B need not be greater than A)."
+  echo
+
+  echo "The \`config\` command queries and manages the script manager\`s configuration."
+  echo "Configuration is read from and written to the file $SPTCFG_FILE."
+  echo "Commandline options have overriding priority over configuration values."
+  echo "The configuration file path can be passed via the environment variable SPTCFG_FILE before running $SPT_THIS."
+  echo "Example: SPTCFG_FILE=~/.config/${SPT_THIS}rc $SPT_THIS edit -fg -L50 script.sh"
+  echo
+
+  echo "The \`config\` command has four modes of operation: list, get, set and reset."
+  echo "Given -l/--list among \`config\`'s own options (i.e. before any \`--\`), it operates in \`list\` mode, whatever else is on the command line; otherwise the mode follows the number of non-option arguments, the words of a trailing command line included."
+  echo "In \`list\` mode, \`config\` prints every valid configuration name and exits, without getting, setting or resetting anything."
+  echo "With no non-option arguments at all, \`config\` operates in \`reset\` mode, resetting everything to its default value, or restoring the configuration file."
+  echo "With one or more, \`config\` operates in \`set\` mode for those that contain an equal sign character, and in \`get\` mode for any others."
+  echo "In \`get\` mode, \`config\` prints the value associated with a given configuration name (not sections; use -m/--match for them)."
+  echo "In \`set\` mode, \`config\` temporarily or permanently changes one or more configuration values."
+  echo "In \`set\` mode alone, \`config\` is enabled to run, under the modified configuration, any $SPT_THIS command line, including itself; the other modes change nothing for a command to run under, so they do not run one."
+  echo "That command line is always introduced by a \`--\` argument: everything after the \`--\` is the command with its own options and arguments, and everything before it belongs to \`config\`."
+  echo "The \`--\` is required even when the command line carries no flags of its own, so that a command name is never mistaken for a configuration name to get or set."
+  wait
+}
+
+spt_help() { help_text $1 $2 | less; }
+
+spt_getopt() {
+  if [[ -z ${SPT_CMD_OPTMAP[-h]} ]]; then
+    declare spec=$1 option opt_argtype opt_argname short long valid; shift
+    declare -ga SPT_CMD_OPTS=() SPT_CMD_ARGS=()
+    declare -gA SPT_CMD_OPTMAP=()
+    declare -g  spt_argi=0 spt_argc spt_args_start spt_arg spt_opt spt_optarg
+
+    IFS=';' read -a options <<< $spec
+    for option in ${options[@]}; do
+      IFS=':' read option opt_argtype opt_argname <<< $option
+      short=${option:0:1} long=--${option:1}
+      SPT_CMD_OPTMAP[-$short]=$short$opt_argtype
+      SPT_CMD_OPTMAP[$long]=$short$opt_argtype
+      valid+="-$short $long"; test "$opt_argname" && valid+=" $_"; valid+=', '
+    done
+    valid=${valid%, }; SPT_CMD_OPTMAP[-h]=h; SPT_CMD_OPTMAP[--help]=h
+    unset spec option argtype short long
+
+    help_valid() { echo "Valid options for $SPT_CMD: $valid" && exit 1; }
+    check_opt()  { test "${SPT_CMD_OPTMAP[$1]}" || spt_die --up 2 "invalid option: $1 (valid options: $valid)"; }
+
+    local args_only=false opt_gets_arg=false value; spt_argi=0
+    for arg; do
+      [[ $arg == --help ]] && help_valid
+      if [[ $arg == -- ]]; then
+        args_only=true opt_gets_arg=false spt_args_start=${#SPT_CMD_ARGS[@]}
+      elif $args_only || [[ ${arg:0:1} != - ]]; then
+        # the last argument on the command line is reserved for the command itself, but only while it still has none
+        { $opt_gets_arg && { (( spt_argi != $#-1 )) || (( ${#SPT_CMD_ARGS[@]} )); }; } && SPT_CMD_OPTS+=($arg) opt_gets_arg=false || SPT_CMD_ARGS+=($arg)
+      else
+        opt_gets_arg=null
+        if [[ ${arg:1:1} == - ]]; then
+          if [[ $arg == *=* ]]; then
+            IFS='=' read -r arg value <<< $arg
+            SPT_CMD_OPTS+=($arg $value)
+            opt_gets_arg=false # already got argument, don't do it again
+          else
+            SPT_CMD_OPTS+=($arg)
+          fi
+        else
+          check_opt ${arg:0:2}; SPT_CMD_OPTS+=(${arg:0:2})
+          if [[ ${arg:0:2} == -h ]]; then
+            help_valid
+          elif [[ ${#arg} -gt 2 ]]; then
+            if [[ ${arg:2:1} == '=' ]]; then
+              SPT_CMD_OPTS+=(${arg:3})
+              opt_gets_arg=false
+            elif [[ ${SPT_CMD_OPTMAP[${arg:0:2}]:1} ]]; then # req or opt: alone in the word, the option owns the whole tail
+              SPT_CMD_OPTS+=(${arg:2}); arg=${arg:0:2}
+            else
+              local -i i
+              for (( i=2; i<${#arg}; ++i )); do
+                if [[ ${arg:$i:1} == 'h' ]]; then
+                  help_valid
+                elif [[ ${arg:$i:1} == '=' ]]; then # inside a cluster only an equal sign may open an argument
+                  SPT_CMD_OPTS+=(${arg:$((i+1))}) opt_gets_arg=false && break
+                else
+                  check_opt -${arg:$i:1}
+                  SPT_CMD_OPTS+=(-${arg:$i:1})
+                fi
+              done
+              arg=-${arg:$((i-1)):1}
+            fi
+          fi
+        fi
+
+        if [[ $opt_gets_arg == null ]]; then
+          check_opt $arg
+          value=${SPT_CMD_OPTMAP[$arg]:1}
+          [[ $value == req || $value == opt ]] && opt_gets_arg=true || opt_gets_arg=false
+        fi
+      fi
+      ((++spt_argi))
+    done
+    spt_argc=$spt_argi; spt_argi=0
+    [[ -z $spt_args_start ]] && spt_args_start=${#SPT_CMD_ARGS[@]} # no command line: every argument belongs to the command itself
+    unset valid args_only prev_opt opt_gets_arg value
+  fi
+
+  spt_arg=${SPT_CMD_OPTS[$((spt_argi++))]}
+  [[ -z $spt_arg || ${spt_arg:0:1} != - ]] && spt_arg=${SPT_CMD_ARGS[0]} && return 1
+  spt_opt=${SPT_CMD_OPTMAP[$spt_arg]:0:1}
+  local spt_optargtype=${SPT_CMD_OPTMAP[$spt_arg]:1}
+
+  if [[ -n $spt_optargtype ]]; then
+    spt_optarg=${SPT_CMD_OPTS[$spt_argi]}
+    [[ ${spt_optarg:0:1} == - ]] && spt_optarg='' || ((++spt_argi))
+    [[ $spt_optargtype == req && -z $spt_optarg ]] && spt_die --up "option $spt_arg requires an argument" || return 0
+  fi
+}
+
+spt_sync() { exec rsync -cah -Pv --del --inplace --chmod F$SCRIPTS_BACKUP_DIR_PERMS $SCRIPTS_DIR/ $SCRIPTS_BUP; }
+
+spt_perms() {
+                            find $SCRIPTS_DIR -mindepth 1 ! -perm $SCRIPTS_DIR_PERMS        -exec chmod -v $SCRIPTS_DIR_PERMS        {} \;
+  test -n "$SCRIPTS_BUP" && find $SCRIPTS_BUP -mindepth 1 ! -perm $SCRIPTS_BACKUP_DIR_PERMS -exec chmod -v $SCRIPTS_BACKUP_DIR_PERMS {} \;
+}
+
+
+# =========================== CONFIGURATION ===========================
+
+sptcfg_checkname_section() { [[ "$1" =~ ^\[[a-z]+\]$ ]]; }
+sptcfg_checkname_config()  { [[ "$1" =~ ^[a-z-]+$    ]]; }
+
+check_sectionline() {
+  if ! sptcfg_checkname_section "$config_line"; then
+    spt_die "configuration file ($SPTCFG_FILE) is corrupt: section at line $line_number ($config_line) is invalid"
+  fi
+}
+
+sptcfg_load() {
+  confcheck_cache() {
+    local checkcache_file=$HOME/.cache/spt-last-confcheck command=$1
+    local -A checkcache
+    local cached=false write_back=false
+    local cfgpath
+
+    test -e $checkcache_file || touch $_ 2>/dev/null || return 0 # do full check anyway in the impossibility of a cache
+    if ! spt_is_file_empty $checkcache_file; then
+      while read -r line; do
+        [[ -z $line ]] && continue
+        if [[ -z $cfgpath ]]; then
+          cfgpath=$line
+        else
+          checkcache[$cfgpath]=$line # config mtime
+          cfgpath=''
+        fi
+      done < $checkcache_file
+      cached=true
+    fi
+
+    case $command in
+      is-cached) $cached;;
+      modified) [[ -z ${checkcache[$SPTCFG_FILE]} ]] || [[ ${SPTCFG_STAT[mtime]} != ${checkcache[$SPTCFG_FILE]} ]];;
+      delete) unset checkcache\[$SPTCFG_FILE\]; write_back=true;;
+      save) checkcache[$SPTCFG_FILE]=${SPTCFG_STAT[mtime]} write_back=true;;
+    esac
+
+    if $write_back; then
+      truncate -s0 $checkcache_file
+      for cfgpath in ${!checkcache[@]}; do
+        echo $cfgpath
+        echo ${checkcache[$cfgpath]}
+      done >> $checkcache_file
+    fi
+  }
+
+  needs_full_check() { ! confcheck_cache is-cached || confcheck_cache modified; }
+
+  getenv() {
+    local name=${value:4} i=0
+    while [[ ${name:$i:1} =~ [a-zA-Z0-9_] ]]; do
+      ((++i))
+    done
+    name=${name:0:$i}
+    local -n valueref=$name
+    test -n "$valueref" && printf -v value %s "$_${value:$((i+4))}" || spt_die --up "environment variable \$$name is not defined"
+  }
+
+
+  if [[ ! -e $SPTCFG_FILE ]]; then
+    confcheck_cache delete; spt_die "Error: configuration file ($SPTCFG_FILE) does not exist."
+  elif [[ ! -f $SPTCFG_FILE ]]; then
+    confcheck_cache delete; spt_die "Error: $SPTCFG_FILE is not a file."
+  elif (( SPTCFG_STAT[size] == 0 )); then
+    confcheck_cache delete
+    spt_warn 'Warning: %s is empty; use `%s config --restore` to restore it. Using default configuration...\n' $SPTCFG_FILE $SPT_THIS
+    sptcfg_load_default
+    return
+  fi
+
+  local section name value config_line line_number
+  mapfile -t config_lines < <(sed -r 's/\s*#.+$//;/^$/d' $SPTCFG_FILE) # remove comments and empty lines
+  local config_line="${config_lines[0]}" line_number=1
+
+  check_sectionline && section=${config_line:1:-1}
+
+  for (( i=1; i<${#config_lines[@]}; ++i )); do
+    (( ++line_number ))
+    config_line="${config_lines[$i]}"
+    [[ ${config_line:0:1} == '[' ]] && check_sectionline && section=${config_line:1:-1} && continue
+    IFS='=' read -r name value <<< "$config_line"
+    sptcfg_checkname_config "$name" || spt_die "invalid configuration name ($name) on line $line_number of configuration file ($SPTCFG_FILE)"
+    [[ "$value" == *~/*  ]] && value=$(sed -r "s|^~/|$HOME/|" <<< $value)
+    [[ "$value" =~ ^env: ]] && getenv
+    SPTCFG[$section/$name]="$value" SPTCFG_NAMES+=($section/$name)
+  done
+
+  needs_full_check && sptcfg_check && confcheck_cache save
+}
+
+sptcfg_load_default() {
+  SPTCFG[path/spts-origdir]=/app/scripts
+  SPTCFG[path/spts-bkupdir]=/app/script-backups
+  SPTCFG[path/enum-mapping]=/etc/spt.enum
+
+  SPTCFG[perms/spts-origdir]=755
+  SPTCFG[perms/spts-bkupdir]=600
+  SPTCFG[perms/enum-mapping]=600
+
+  SPTCFG[edit/mode]=cli
+  SPTCFG[edit/selected-match]=all
+  SPTCFG[edit/scriptname-sep]=dash
+  SPTCFG[edit/autoshebang]=bash
+
+  SPTCFG[editor/cli]=vim
+  SPTCFG[editor/gui]=
+  SPTCFG[editor/argfmt-cli]=%l\ %s
+  SPTCFG[editor/argfmt-gui]=%s
+  SPTCFG[editor/lnflag-cli]=+
+  SPTCFG[editor/lnflag-gui]=
+  SPTCFG[editor/wait-on-gui]=false
+
+  SPTCFG[del/confirm]=all
+  SPTCFG[view/mode]=pagedcolor
+
+  SPTCFG[list/dir]=scripts
+  SPTCFG[list/sort]=name
+
+  SPTCFG[link/force]=false
+  SPTCFG[link/symbolic]=true
+  SPTCFG[link/symchain]=true
+}
+
+sptcfg_store() {
+  sptcfg_check
+
+  local section name value svalue config_line line_number
+  mapfile -t config_lines < $SPTCFG_FILE # including comments and empty lines, so that we can write them back
+  local config_line line_number=1 line_char
+
+  for (( i=0; i<${#config_lines[@]}; ++i )); do
+    (( ++line_number ))
+    config_line="${config_lines[$i]}"
+    line_char=${config_line:0:1}
+
+    if [[ -n "$config_line" && $line_char != '#' ]]; then
+      if [[ $line_char == '[' ]]; then
+        check_sectionline
+        section=${config_line:1:-1}
+      else
+        IFS='=' read -r name value <<< "$config_line"
+        sptcfg_checkname_config "$name" || spt_die "invalid configuration name ($name) on line $line_number of configuration file ($SPTCFG_FILE)"
+	svalue=${value%%#*}; svalue=${svalue%"${svalue##*[![:space:]]}"} # stripped value
+        [[ $svalue != ${SPTCFG[$section/$name]} ]] && config_line="${config_line/=$svalue/=${SPTCFG[$section/$name]}}"
+      fi
+    fi
+
+    echo "$config_line"
+  done > $SPTCFG_FILE
+}
+
+sptcfg_restore() {
+  cat <<EOF | base64 -d | gunzip -d > $SPTCFG_FILE
+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
+EOF
+
+  local CONFIG_HASH=ba728611b3ebec48d6a8a6822f87fa17107b3c03d199837881e654708cf7ce4ecc02172adaa90361b3199563e0a89ad276b226802c0f7782988bdbc5f23861e4
+
+  if command -v sha512sum >/dev/null; then
+    if ! sha512sum --check --status <<< "$CONFIG_HASH  $SPTCFG_FILE"; then
+      echo "WARNING: Default configuration file is corrupt: its hash does not match the expected one. Has its base64 string been altered in any way?" >&2
+      printf "Proceeding anyway...\n\n" >&2
+    fi
+  fi
+}
+
+spt_config() {
+  local arg argc i name endopts=false listmode=false full=false
+  # One pass settles the mode before a single option is parsed. -l/--list is a
+  # mode selector rather than any one mode's flag, so it wins wherever it shows
+  # up; failing that, the count of non-option arguments tells reset from
+  # get/set. Anything after the -- belongs to the trailing command, so the -l
+  # scan stops there -- `config x=1 -- link -l help help.sh` passes -l to link.
+  # argc still counts the words after the --, as it always has.
+  for (( i=1, argc=0; i<=$#; ++i )); do
+    arg=${@:$i:1}
+    if [[ ${arg:0:1} == - ]]; then
+      if [[ $arg == -- ]]; then
+        endopts=true
+      elif ! $endopts && [[ $arg == --list || ( $arg != --* && $arg == -*l* ) ]]; then
+        listmode=true
+      fi
+    else
+      ((++argc))
+    fi
+  done
+
+  # List mode: neither of the other two runs, and no command line is executed --
+  # nothing was configured for one to run under.
+  if $listmode; then
+    while spt_getopt 'llist;Ffull' $@; do
+      case $spt_opt in
+        l) ;; # settled by the pass above; here so that -l counts as a valid option
+        F) full=true;;
+      esac
+    done
+
+    for name in ${SPTCFG_NAMES[@]}; do
+      $full && echo "$name=${SPTCFG[$name]}" || echo $name
+    done
+    return 0
+  fi
+
+  if (( $argc == 0 )); then
+    # state modes:
+    # default=true, persist=false: restore default configuration in memory only
+    # default=true, persist=true: restore default configuration both in memory and in the file
+    # default=false (restore mode): factory-reset configuration file, then reload it
+    local default=true persist=false
+
+    while spt_getopt 'ddefault;ppersist;rrestore' $@; do
+      case $spt_opt in
+        d) default=true persist=false;;
+        p) default=true persist=true;;
+        r) default=false;;
+      esac
+    done
+
+    if $default; then
+      sptcfg_load_default
+      $persist && sptcfg_store
+    else
+      sptcfg_restore
+      sptcfg_load
+    fi
+  else
+    matchname() {
+      matches=()
+      for n in $SPTCFG_VALID; do [[ $n == *$name* ]] && matches+=($n); done
+      [[ ${#matches[@]} -gt 0 ]]
+    }
+
+    checkname() {
+      if { $match && [[ -n $name ]] && ! matchname; } || { ! $match && [[ ! "$SPTCFG_VALID" =~ .*^$name$.* ]]; }; then
+        local msg="$name: invalid configuration name" matchmsg="use -m or --match for section names" is_sectionlike=false name_regex='[^ /]+'
+        [[ $name =~ ^$name_regex/?$ || ! $name =~ ^$name_regex/$name_regex$ ]] && ! $match && is_sectionlike=true
+        if $fail || (( argc == 1 )); then
+          $is_sectionlike && spt_die --up "$msg; $matchmsg" || spt_die --up "$msg; use config -l (or --list) to view all the valid names"
+        else
+          $is_sectionlike && matchmsg=" ($matchmsg)" || matchmsg=''
+          ( spt_die --up "$msg$matchmsg; ignoring..." )
+          return 1
+        fi
+      elif ! $match ; then
+        matches=($name)
+      fi
+    }
+
+    print_value() {
+      name=$spt_arg
+      checkname || return 1
+      for name in ${matches[@]}; do
+        value=${SPTCFG[$name]}
+        $full && echo "$name=$value" || echo $value
+      done
+    }
+
+    set_value() {
+      name=$1 value=$2
+      checkname || return 1
+      for name in ${matches[@]}; do
+        SPTCFG[$name]=$value
+        ((++setcnt))
+      done
+    }
+
+
+    local value setcnt=0 match=false fail=false persist=false; local -a matches
+    while spt_getopt 'mmatch;ffail;Ffull;ppersist' $@; do
+      case $spt_opt in
+        m) match=true;;
+        f) fail=true;;
+        F) full=true;;
+        p) persist=true;;
+      esac
+    done
+
+    local SPTCFG_VALID="$(tr ' ' '\n' <<< ${SPTCFG_NAMES[*]})"
+    spt_argi=1 # reused here to walk SPT_CMD_ARGS, which spt_getopt does not iterate itself
+
+    while [[ -n $spt_arg ]]; do
+      if [[ $spt_arg == *=* ]]; then
+        set_value ${spt_arg/=*/} ${spt_arg/*=/}
+      else
+        print_value
+      fi
+      (( spt_argi >= spt_args_start )) && break
+      spt_arg=${SPT_CMD_ARGS[$((spt_argi++))]}
+    done
+
+    if (( setcnt > 0 )); then
+      if $persist; then
+        sptcfg_store
+      else
+        sptcfg_check
+      fi
+    fi
+
+    # A trailing command line belongs to `set` mode alone: it is there so the
+    # command runs under the configuration this call changed, and there is
+    # nothing for it to run under when nothing was set.
+    if (( setcnt > 0 )) && test "${SPT_CMD_ARGS[spt_argi]}"; then
+      sptcfg_check
+      unset SCRIPTS_DIR SPT_CMD_OPTMAP\[-h\]
+      spt_main ${SPT_CMD_ARGS[@]:$spt_argi}
+    fi
+  fi
+}
+
+# =========================== CONFIGURATION CHECKS ===========================
+
+sptcfg_invalid() { spt_die "Error (invalid configuration): $config ($value): $1)"; }
+
+sptcfg_check_path() {
+  local config=path/spts-$1dir
+  local value=${SPTCFG[$config]}
+  if   [[ ! -e $value ]]; then
+    sptcfg_invalid 'path does not exist'
+  elif [[ ! -d $value ]]; then
+    sptcfg_invalid 'not a directory'
+  elif [[ ! -x $value ]]; then
+    sptcfg_invalid 'directory is not accessible'
+  elif [[ ! -r $value || ! -w $value ]]; then
+    sptcfg_invalid 'cannot read and/or write files in that directory'
+  fi
+}
+
+sptcfg_check_enummap() {
+  local config=path/enum-mapping value=${SPTCFG[path/enum-mapping]}
+  if [[ -e $value ]]; then # it's okay if it doesn't exist; we'll create it later
+    if [[ ! -f $value ]]; then
+      sptcfg_invalid 'not a regular file'
+    elif [[ ! -r $value ]]; then
+      sptcfg_invalid 'cannot read file (insufficient permissions)'
+    elif [[ ! -w $value ]]; then
+      sptcfg_invalid 'cannot write to file (insufficient permissions)'
+    fi
+  fi
+}
+
+sptcfg_check_perms() {
+  local config=perms/$1 value=${SPTCFG[perms/$1]}
+  local IFS=,
+  for perms in $value; do
+    [[ ! $perms =~ ^(([ugoa]*([-+=]([rwxXst]*|[ugo]))+|[-+=]?[0-7]{3}))$ ]] && sptcfg_invalid 'invalid permission specification; see chmod(1) for more information'
+  done
+}
+
+sptcfg_check_others() {
+  check_valueset() {
+    format_valid_values() {
+        local quote='`'
+        printf "$quote%s$quote" $valid_values_set
+        for (( i=1; i<$((${#valid_values_set[@]}-1)); ++i )); do printf ", $quote%s$quote" ${valid_values_set[$i]}; done
+        printf " and $quote%s$quote" ${valid_values_set[$i]}
+    }
+    config_specific_checks() {
+      case $config in
+        edit/scriptname-sep) [[ $value =~ ^[-_.:]$ ]] && sptcfg_invalid "use the characters' names ($(format_valid_values)), not their literal representation";;
+      esac
+    }
+
+    local config=$1 value=${SPTCFG[$1]} valid=false
+    IFS=' ' read -a valid_values_set <<< $2
+    config_specific_checks
+    for vv in ${valid_values_set[@]}; do [[ $value == $vv ]] && valid=true && break; done
+    $valid || sptcfg_invalid "invalid value (valid ones are $(format_valid_values)"
+  }
+
+  check_exec() {
+    IFS=' ' local config=$1 value=${SPTCFG[$1]} empty_ok=false # IFS is set for trimming leading spaces, if any, which are not of interest here
+    [[ $2 == empty_ok ]] && empty_ok=true
+    if [[ -n $value ]]; then
+      [[ -f $value ]] && sptcfg_invalid 'give it a program name, not a path'
+      command -v $value >/dev/null || sptcfg_invalid 'no executable program found; check PATH, file permissions, and the configured name'
+    elif ! $empty_ok; then
+      sptcfg_invalid 'should not be empty (specify a program name)'
+    fi
+  }
+
+  check_boolean() { local config=$1 value=${SPTCFG[$1]}; [[ ! $value =~ ^(true|false)$ ]] && sptcfg_invalid 'invalid boolean value (must be either true or false)'; }
+
+  check_argfmt() {
+    local config=$1 value=${SPTCFG[$1]}
+    local fmtspecs=none # none, scriptname_absent, scriptname_present, repeated
+    local char
+
+    # state machine
+    for (( i=0; i<${#value}; ++i )); do
+      char=${value:$i:1}
+      if [[ $char == % ]]; then
+        char=${value:$((++i)):1}
+        case $char in
+          s|l|%)
+            case $fmtspecs in
+              none)               [[ $char == s ]] && fmtspecs=scriptname_present || fmtspecs=scriptname_absent;;
+              scriptname_absent)  [[ $char == s ]] && fmtspecs=scriptname_present || fmtspecs=repeated;;
+              scriptname_present) [[ $char == l ]] || fmtspecs=repeated;; # once in the 'repeated' state, there's no way out, for error-logging purposes
+              repeated) break;;
+            esac
+            ;;
+          *) sptcfg_invalid 'unknown format specifier (use %s, %l or %%)';;
+        esac
+      fi
+    done
+
+    case $fmtspecs in
+      none)              sptcfg_invalid 'no specifier used in format string (there must be at least %s, the scriptname specifier)';;
+      repeated)          sptcfg_invalid '%s and %l should each be used only once in the format string';;
+      scriptname_absent) sptcfg_invalid 'scriptname format specifier %s is absent from the format string ';;
+    esac
+  }
+
+  local -a which=($1)
+
+  if [[ ! -v CHECKCONF_MAPPING ]]; then
+    declare -gA CHECKCONF_MAPPING=(
+      [edit/mode]="valueset.'cli gui'"
+      [edit/selected-match]="valueset.'all first last'"
+      [edit/scriptname-sep]="valueset.'dash underline dot colon'"
+
+      [edit/autoshebang]=exec.empty_ok [editor/cli]=exec. [editor/gui]=exec.empty_ok
+
+      [editor/argfmt-cli]=argfmt. [editor/argfmt-gui]=argfmt. [editor/wait-on-gui]=boolean.
+
+      [del/confirm]="valueset.'all once no'"
+      [view/mode]="valueset.'pagedcolor paged color simple'"
+      [list/dir]="valueset.'scripts backup both'"
+      [list/sort]="valueset.'name date-abs date-rel'"
+
+      [link/force]=boolean. [link/symbolic]=boolean. [link/symchain]=boolean.
+    )
+  fi
+
+  [[ $1 == all ]] && which=(${!CHECKCONF_MAPPING[@]})
+
+  for conf in ${which[@]}; do eval "check_${CHECKCONF_MAPPING[$conf]/./ $conf }"; done
+}
+
+sptcfg_check() {
+  sptcfg_check_path orig
+  sptcfg_check_path bkup
+  sptcfg_check_enummap
+
+  sptcfg_check_perms spts-origdir
+  sptcfg_check_perms spts-bkupdir
+  sptcfg_check_perms enum-mapping
+
+  sptcfg_check_others all
+
+  return 0
+}
+
+
+# =========================== ENUMERATION ===========================
+
+spt_enum_register() {
+  local new_script=$1
+  local -i new_number=$SPT_ENUM_NES
+
+  if (( new_number == SPT_ENUM_MAX )); then
+    local -i number; SPT_ENUM_MAX+=SPT_ENUM_INC
+    for (( number=SPT_ENUM_MAX-SPT_ENUM_INC; number<SPT_ENUM_MAX; ++number )); do
+      printf '%d %s\n' $number $SPT_ENUM_EMPTY
+    done >> $SPT_ENUM_FILE
+    unset number
+  fi
+
+  SPT_ENUM_SCRIPTS[$new_number]=$new_script
+  SPT_ENUM_NUMBERS[$new_script]=$new_number
+  sed -i "$((new_number+1)) s/\\$SPT_ENUM_EMPTY$/$new_script/" $SPT_ENUM_FILE
+}
+
+spt_enumdb_generate() {
+  local errorflag=$1 errormsg=$2
+
+  if [[ -n $errorflag ]]; then $SPT_NOSCRIPTS && return 1 || echo $SPT_ENUM_FILE $errormsg >&2
+  elif $SPT_NOSCRIPTS;    then spt_die "failed to generate enums file: no script in $SCRIPTS_DIR"; fi
+
+  SPT_ENUM_MAX=$SPT_ENUM_INC
+  while (( SPT_ENUM_MAX <= SPT_COUNT )); do ((SPT_ENUM_MAX+=$SPT_ENUM_INC)); done
+
+  local number script
+  for (( number=0; number<SPT_COUNT; ++number )); do
+    script=${SPT_SCRIPTNAMES[$number]}
+    SPT_ENUM_SCRIPTS[$number]=$script
+    SPT_ENUM_NUMBERS[$script]=$number
+  done
+  SPT_ENUM_NES=$number
+  for (( ; number < SPT_ENUM_MAX; ++number )); do
+    SPT_ENUM_SCRIPTS[$number]=$SPT_ENUM_EMPTY
+  done
+
+  move_sptname() {
+    local linknum=$1 linkname=${SPT_ENUM_SCRIPTS[$1]} targetnum=$2
+    ((linknum==targetnum)) && return
+    SPT_ENUM_SCRIPTS[$targetnum]+=" $linkname"
+    unset SPT_ENUM_SCRIPTS\[$linknum\]
+    SPT_ENUM_NUMBERS[$linkname]=$targetnum
+  }
+
+  local -a links=($(find $SCRIPTS_DIR -mindepth 1 \( -type l -o -type f -links +1 \)))
+  if [[ ${#links[@]} -gt 0 ]]; then
+    for script in $(ls -rt ${links[@]}); do
+      number=${SPT_ENUM_NUMBERS[$(basename $script)]}
+      if test -L $script; then
+        script=$(readlink $_)
+        [[ $(dirname $script) =~ ^(\.|$SCRIPTS_DIR)$ ]] || continue
+      else
+        stat $script
+        test $script != ${SPT_INODES[${STAT[inode]}]} && script=$_ || continue
+      fi
+      move_sptname $number ${SPT_ENUM_NUMBERS[$script]}
+    done
+
+    declare number=0 new_number=0
+    while true; do
+      script=${SPT_ENUM_SCRIPTS[$((number++))]}
+      test -z $script && continue
+      SPT_ENUM_SCRIPTS[$((new_number++))]=$script
+      if [[ $script == $SPT_ENUM_EMPTY ]]; then
+        for (( number=new_number; number<SPT_ENUM_MAX; ++number )); do test ${SPT_ENUM_SCRIPTS[$number]} != $SPT_ENUM_EMPTY && SPT_ENUM_SCRIPTS[$number]=$_; done
+        break
+      fi
+    done
+    SPT_ENUM_NES=$new_number
+    (( SPT_ENUM_NES < SPT_ENUM_MAX - SPT_ENUM_INC )) && ((SPT_ENUM_MAX-=SPT_ENUM_INC))
+  fi
+
+  for (( number=0; number<SPT_ENUM_MAX; ++number )); do
+    script=${SPT_ENUM_SCRIPTS[$number]}
+    printf "%d %s\n" $number $script
+    if [[ $script != $SPT_ENUM_EMPTY ]]; then
+      ((++SPT_ENUM_CNT))
+    elif [[ $script == $SPT_THIS* ]]; then
+      SPT_THIS_NUMBER=$number
+    fi
+  done > $SPT_ENUM_FILE
+}
+
+spt_enumdb_load() {
+  while IFS=' ' read -r number script; do
+    if (( number != SPT_ENUM_MAX )); then
+      if [[ $1 == regenerated ]]; then
+        printf '' > $SPT_ENUM_FILE
+        spt_debug "$SPT_ENUM_FILE remained corrupted and has been cleared up; check spt_enumdb_generate for bugs."
+      else
+        spt_error "$SPT_ENUM_FILE is corrupted; regenerating and reloading..."
+      fi
+      spt_enumdb_generate
+      spt_enumdb_load regenerated
+      return $?
+    fi
+
+    SPT_ENUM_SCRIPTS[$number]=$script
+    [[ $script == $SPT_THIS* ]] && SPT_THIS_NUMBER=$number
+    if [[ -z ${SPT_ENUM_NUMBERS[$script]} ]]; then
+      if [[ $script == *' '* ]]; then
+        IFS=' ' read -ra scripts <<< $script
+        for script in ${scripts[@]}; do SPT_ENUM_NUMBERS[$script]=$number; done
+      else
+        SPT_ENUM_NUMBERS[$script]=$number
+      fi
+    fi
+    ((++SPT_ENUM_MAX))
+    [[ $script != $SPT_ENUM_EMPTY ]] && ((++SPT_ENUM_CNT))
+  done < $SPT_ENUM_FILE
+
+  SPT_ENUM_NES=${SPT_ENUM_NUMBERS[$SPT_ENUM_EMPTY]}
+  [[ -z $SPT_ENUM_NES ]] && SPT_ENUM_NES=$SPT_ENUM_MAX
+}
+
+spt_enumdb_rename() {
+  local number=$1 oldname=$2 newname=$3
+  [[ -z $3 ]] && oldname=${SPT_ENUM_SCRIPTS[$number]} newname=$2
+  SPT_ENUM_SCRIPTS[$number]="$newname"
+  unset SPT_ENUM_NUMBERS\[$oldname\]
+  sed -ri "$((number+1)) s|$oldname|$newname|" $SPT_ENUM_FILE
+}
+
+spt_enumdb_clear() { spt_enumdb_rename $1 "$SPT_ENUM_EMPTY"; }
+
+checkfor() {
+  local -n check=SPT_IS$1 last=SPT_IS$1_LAST
+  local value=$2 regex="^$3[0-9]+$"
+  if [[ $last != $value ]]; then
+    [[ $value =~ $regex ]] && check=true || check=false
+    last=$value
+  fi
+  $check
+}
+
+spt_isnum()   { checkfor NUM   $1; }
+spt_isrange() { checkfor RANGE $1 '[0-9]+-'; }
+
+spt_firstlink() {
+  stat $1 2>/dev/null
+  [[ -n $SPT_FIRSTLINK ]] && SPT_FIRSTLINK=''
+  (( ${STAT[nlink]} == 1 )) && return 1
+  SPT_FIRSTLINK=${SPT_INODES[${STAT[inode]}]}
+  [[ $SPT_FIRSTLINK == $(basename $1) ]] && SPT_FIRSTLINK='' && return 1
+  return 0
+}
+
+spt_enum_get() {
+  local key=$1 outvar=$2 array_output=false value null
+  [[ $1 == -a   ]] && array_output=true key=$2 outvar=$3
+  [[ -z $outvar ]] && outvar=null
+
+  case $outvar in outvar|key|start|end) spt_debug "error: outvar ($outvar) should not be set to any of this function's locals";; esac
+  scripts=() numbers=()
+
+  if spt_isnum $key; then
+    if (( key >= 0 && key <= SPT_ENUM_MAX )); then
+      value=${SPT_ENUM_SCRIPTS[$key]}
+      $array_output && scripts+=($value) || IFS=' ' printf -v $outvar %s $value
+      # IFS=' ' is used above so that only the first scriptname is selected if key has symbolic links
+    else
+      spt_error "$key: invalid number (must be between 0 and $SPT_ENUM_MAX)"
+      return 1
+    fi
+  elif [[ $key == $SPT_ENUM_EMPTY ]]; then
+    $array_output && scripts+=($SPT_ENUM_NES) || printf -v $outvar %d $SPT_ENUM_NES
+  elif [[ -n ${SPT_ENUM_NUMBERS[$key]} ]]; then
+    value=${SPT_ENUM_NUMBERS[$key]}
+    $array_output && numbers+=($value) || printf -v $outvar %d $value
+  else # unconditional array output
+    if spt_isrange $key; then
+      local start end; IFS=- read start end <<<$key
+      if (( start >= 0 && end <= SPT_ENUM_MAX )); then
+        printf -v $outvar %s ${SPT_ENUM_SCRIPTS[$start]}
+        IFS=' ' numbers=($(eval "echo {$start..$end}"))
+      else
+        spt_error "$key: invalid range (must be between 0 and $SPT_ENUM_MAX)"
+        return 1
+      fi
+    else
+      local IFS=' '
+      scripts=($(cd $SCRIPTS_DIR && echo *$key*))
+      if (( ${#scripts[@]} == 0 )); then
+        spt_error --up "$key: no such script"
+        return 1
+      fi
+    fi
+  fi
+}
+
+spt_enum() {
+  (( SPT_ENUM_CNT == 0 )) && spt_die 'No enums to list.'
+
+  print_script() {
+    local script=$1 number=$2 print_script_only=false empty=false esc end='\n'
+
+    [[ -z $number ]] && print_script_only=true
+    if [[ $script == *$SPT_ENUM_EMPTY ]]; then
+      empty=true
+      [[ $number == $SPT_ENUM_NES || $script == '->'* ]] && script='[next empty slot]' empty=false || script='[empty]'
+      esc=$yellow
+    elif [[ $script == $SPT_THIS* ]]; then
+      esc=$green
+    fi
+    [[ -n $esc ]] && end="$reset\n"
+
+    if $empty && ! $print_script_only; then
+      local last_number=$number
+      while (( last_number < SPT_ENUM_MAX )); do
+        [[ ${SPT_ENUM_SCRIPTS[$((last_number+1))]} == $SPT_ENUM_EMPTY ]] || break
+        ((++last_number))
+      done
+      if (( last_number - number >= 1 )); then
+        local sep='–';
+        (( last_number - number == 1 )) && sep='&'
+        printf "$esc${numfmt:0:-2} $sep $numfmt%s$end" $number $last_number "$script"
+        k=$last_number
+        return
+      fi
+    fi
+
+    printf "$esc$numfmt%s$end" $number "$script" # numfmt will be empty when number is empty (print_script_only is true)
+    ((++k))
+  }
+
+  print_number() {
+    local number=$1 script=$2 sptfile=$SCRIPTS_DIR/$2 fmt='%s: '
+
+    if [[ -z $script ]]; then
+      unset fmt
+    elif test -L $sptfile; then
+      script+=" (symbolic link to $(readlink $sptfile))"
+    elif spt_firstlink $_; then
+      script+=" (hard link to $SPT_FIRSTLINK)"
+    fi
+
+    case $number in
+      $SPT_THIS_NUMBER) printf "$green$fmt%d$reset\n" $script $number;;
+      [0-9]*) printf "$fmt%d\n" $script $number;;
+    esac
+  }
+
+  print_numbers() { for key; do print_number ${SPT_ENUM_NUMBERS[$key]} $key; done; }
+
+  print_value() {
+    local key=$1 print_value_only=false val
+    [[ $key == --only && -n $2 ]] && print_value_only=true key=$2
+
+    local -a scripts numbers
+    spt_enum_get $key val || return 1
+
+    [[ $key == $SPT_ENUM_NES ]] && val="->$SPT_ENUM_EMPTY"
+    $print_value_only && unset key
+
+    if (( ${#scripts[@]} > 1 )); then
+      for key in ${scripts[@]}; do
+        print_number ${SPT_ENUM_NUMBERS[$key]} $key
+      done
+    elif $SPT_ISNUM; then
+      print_script $val $key
+      return # avoid incrementing k below as print_script already does it
+    else
+      print_number "$val" "$key"
+    fi
+
+    ((++k))
+  }
+
+
+  local -a keys scripts numbers
+  local k=0 keycount=$# num
+  local green='\e[32m' yellow='\e[33m' reset='\e[0m' numfmt=%d # numfmt is used by print_script
+
+  $istty_out || unset green yellow reset # do not use colors when stdout is not a terminal
+
+  if (( keycount == 0 )); then
+    numfmt="%${#SPT_ENUM_MAX}d. "
+    while (( k < SPT_ENUM_MAX )); do
+      print_script ${SPT_ENUM_SCRIPTS[$k]} $k
+    done
+  elif (( keycount == 1 )) && ! spt_isrange $1; then
+    unset numfmt
+    print_value --only $1
+  else
+    keys=($@)
+    for key; do
+      spt_isrange $key && spt_enum_get $key && keys+=(${numbers[@]}) && continue
+      keys+=($key)
+    done
+    keycount=${#keys[@]}
+
+    local -i maxdigits=1 numdigits
+    for key in ${keys[@]}; do
+      if spt_isnum $key; then
+        numdigits=${#key}
+        (( numdigits > maxdigits )) && numfmt=%${numdigits}d maxdigits=numdigits;
+      fi
+    done
+    numfmt+='. '; unset key maxdigits numdigits
+
+    while (( k < keycount )); do
+      print_value ${keys[$k]}
+    done
+  fi
+}
+
+
+# =========================== EDIT AND DELETE ===========================
+
+get_filename() {
+  [[ -z $1 ]] && local sptf=$sptfile || local sptf=$1
+  if [[ -e $SCRIPTS_DIR/$sptf ]]; then
+    sptpaths=($sptf)
+  else
+    local -a scripts numbers
+    spt_enum_get -a $sptf || return 1
+    if [[ ${scripts[0]} == $SPT_ENUM_EMPTY ]]; then
+      spt_isnum $sptf && spt_die "no script with enumeration $sptf yet" || spt_die "$sptf: no script found"
+    fi
+    sptpaths=(${scripts[@]} ${numbers[@]})
+  fi
+}
+
+editfile() {
+  local -a sptpaths; local sptpath sptcopy end=false waiting self_edit new_file selection
+  [[ -z $sptfile ]] && sptfile=$1
+
+  if test ! -e $SCRIPTS_DIR/$sptfile && [[ $sptfile != $SPT_THIS ]]; then
+    get_filename &>/dev/null
+  elif [[ $sptfile != $SPT_THIS ]]; then
+    sptpaths=($sptfile)
+  else
+    sptpaths=($SPT_PATH)
+  fi
+
+  if [[ ${#sptpaths[@]} -eq 0 ]]; then
+    sptpaths=($SCRIPTS_DIR/$sptfile)
+    new_file=true
+  else
+    new_file=false
+    if [[ ${#sptpaths[@]} -gt 1 && $selected_match != all ]]; then
+      [[ $selected_match == first ]] && selection=$sptpaths || selection=${sptpaths[-1]}
+      sptpaths=($selection)
+    fi
+  fi
+
+  for sptpath in ${sptpaths[@]}; do
+    sptfile=$(basename $sptpath)
+    sptcopy=/tmp/$sptfile
+    self_edit=false
+
+    if ! $new_file; then
+      if [[ $sptfile == $SPT_THIS ]]; then
+        cp -a $sptpath $sptcopy
+        sptpath=$sptcopy
+        sptcopy=$SPT_PATH
+        self_edit=true
+      else
+        test ! -e $sptcopy && cp -a $sptpath $_ # do not copy if it was already there (which might be due to a crash)
+      fi
+    else
+      if [[ "$sptfile" == *' '* ]]; then
+        spt_warn "\"$sptfile\" contains spaces, which is not allowed in scriptnames; $SPT_THIS will replace them with dashes."
+        sptfile=${sptfile/ /-}
+        spt_warn "New name: $sptfile"
+      fi
+
+      if test "$autoshebang"; then
+        make_shebang || continue
+        if test "$autoshebang"; then
+          printf %s "$_" > $sptcopy
+          sptpath=$sptcopy
+          sptcopy=/tmp/$sptfile.tmp # for when $istty_in is false
+        fi
+      fi
+    fi
+
+    if $istty_in; then
+      eval "$editor $(printf $editor_argfmt $editor_args)" || end=true
+
+      if $guiwait && ! $end; then
+        waiting=true; trap 'waiting=false' INT
+        while $waiting && pgrep ${SPTCFG[editor/gui]} >/dev/null; do sleep 1; done
+        trap '' INT
+        kill $(pgrep ${SPTCFG[editor/gui]}) 2>/dev/null && end=true
+      fi
+    elif [[ -n $line ]]; then
+      local -i at=$line_num
+      # an autoinserted shebang is not the user's own content, so it does not count towards the line number
+      $new_file && test "$autoshebang" && at+=$(printf %s "$_" | grep -c '')
+      cat > $sptcopy.stdin
+      head -n $((at-1)) $sptpath > $sptcopy.before # the lines above the insertion point
+      tail -n +$at      $sptpath > $sptcopy.after  # and the ones from it onwards, which stdin goes before
+      cat $sptcopy.{before,stdin,after} > $sptpath
+      rm  $sptcopy.*
+    else
+      cat >> $sptpath
+    fi
+
+    if $new_file && test "$autoshebang"; then
+      if [[ -z "$(cat $sptpath | tail -n+2)" ]]; then
+        unlink $sptpath
+      else
+        mv $sptpath $SCRIPTS_DIR
+        sptpath=$SCRIPTS_DIR/$sptfile
+      fi
+    fi
+
+    if { $new_file && [[ -e $sptpath ]]; } || { ! $new_file && hashcmp -n $sptpath $sptcopy; }; then
+      if [[ -v SCRIPTS_BUP ]]; then
+        [[ $sptfile != $SPT_THIS || $SPT_PATH == $SCRIPTS_DIR* ]] && install -m $SCRIPTS_BACKUP_DIR_PERMS $sptpath $SCRIPTS_BUP/$sptfile
+      else
+        spt_warn "\$SCRIPTS_BUP (scripts backup directory) is not defined; the $sptfile script will not be backed up."
+      fi
+      if $self_edit; then
+        mv $sptpath $sptcopy
+        continue
+      fi
+      if $new_file; then
+        spt_enum_register $sptfile
+        chmod $SCRIPTS_DIR_PERMS $sptpath
+      fi
+    elif $self_edit; then
+      sptcopy=$sptpath
+    fi
+
+    if ! $new_file; then unlink $sptcopy; fi # use if-fi to avoid exiting with unlink's exit code
+    $end && return 1
+  done
+  return 0
+}
+
+spt_edit() {
+  make_shebang() {
+    IFS=' ' local -a args=($autoshebang); autoshebang=''
+    local interpreter=${args[0]} env
+
+    if [[ $interpreter == env ]]; then
+      env=$(which env 2>/dev/null) || spt_error "error: env(1) not found in this system; disabling autoshebang..." && return 1
+      interpreter=${args[1]}
+      [[ -z "$interpreter" ]] && spt_error "error: env(1) needs arguments; disabling autoshebang..." >&2 && return 1
+      args=(${args[@]:2})
+    else
+      args=(${args[@]:1})
+      local intpath=$(which $interpreter 2>/dev/null) # local var for checking only
+      [[ -z $intpath ]] && spt_error "$interpreter: invalid interpreter for autoinserted shebang (it either does not exist or is not executable); ignoring..." && return 1
+      interpreter=$intpath
+    fi
+
+    local shebang_line='#!'
+    test $env && shebang_line+="$_ "
+    shebang_line+=$interpreter
+    test ${args[*]} && shebang_line+=" $_"
+
+    printf -v autoshebang '%s\n\n' $shebang_line
+  }
+
+
+  local editmode=${SPTCFG[edit/mode]} autoshebang=${SPTCFG[edit/autoshebang]} editor using_cli_editor sptfile
+  local editor_argfmt editor_args guiwait selected_match=${SPTCFG[edit/selected-match]} line line_flag line_num
+
+
+  while spt_getopt 'ccli;ggui;ffirst;llast;aall;Lline:opt:LINE;bbang:req:ARGS;Bnobang' $@; do
+    case $spt_opt in
+      c) editmode=cli;;
+      g) editmode=gui;;
+      f) selected_match=first;;
+      l) selected_match=last;;
+      a) selected_match=all;;
+      L) if spt_isnum $spt_optarg; then line_num=$_; else line_num=1; fi;;
+      b) autoshebang=$spt_optarg;;
+      B) autoshebang='';;
+    esac
+  done
+  [[ $editmode == cli ]] && using_cli_editor=true || using_cli_editor=false
+
+
+  if [[ -n $line_num ]]; then
+    $using_cli_editor && line_flag=${SPTCFG[editor/lnflag-cli]} || line_flag=${SPTCFG[editor/lnflag-gui]}
+    line=$line_flag$line_num
+  fi
+  if ! $using_cli_editor && [[ -z ${SPTCFG[editor/gui]} ]]; then
+    spt_warn "GUI editing not available; switching to CLI with ${SPTCFG[editor/cli]}..."
+    using_cli_editor=true
+  fi
+
+  if $using_cli_editor; then
+    editor=$(which ${SPTCFG[editor/cli]})
+    editor_argfmt=${SPTCFG[editor/argfmt-cli]}
+    guiwait=false
+  else
+    editor=$(which ${SPTCFG[editor/gui]})
+    editor_argfmt=${SPTCFG[editor/argfmt-gui]}
+    guiwait=${SPTCFG[editor/wait-on-gui]}
+    trap "pkill ${SPTCFG[editor/gui]}" EXIT
+  fi
+
+  if [[ $line ]]; then
+    editor_args=${editor_argfmt/\%l/$line}
+    editor_args=${editor_args/\%s/\$sptpath}
+    editor_argfmt=${editor_argfmt/\%l/%c%d}
+  else
+    editor_argfmt=${editor_argfmt/\%l/}
+    editor_args=${editor_argfmt/\%s/\$sptpath}
+  fi
+
+
+  if [[ -z $spt_arg ]]; then
+    editfile $SPT_THIS || return 1
+  else
+    cd $SCRIPTS_DIR || return 1
+    if [[ $spt_arg == all ]]; then
+      for sptfile in $(find $SCRIPTS_DIR -type f -printf '%f\n'); do editfile || return 1; done
+    else
+      for sptfile in ${SPT_CMD_ARGS[@]}; do editfile || return 1; done
+    fi
+  fi
+}
+
+spt_del() {
+  local -a sptpaths
+  local confirm=${SPTCFG[del/confirm]} confirm_all=false ANS status=0
+
+  while spt_getopt 'yyes;cconfirm;oask-once' $@; do
+    case $spt_opt in
+      y) confirm=no;;
+      c) confirm=all;;
+      o) confirm=once;;
+    esac
+  done
+
+  [[ $confirm == all ]] && confirm_all=true
+
+
+  local red green blue endc endc2
+  $istty_out && green=$'\e[32m' blue=$'\e[34m' endc=$'\e[0m'
+  $istty_err && red=$'\e[31m' endc2=$'\e[0m'
+
+  info()    { echo -e "$blue$1$endc"; }
+  success() { echo -e "$green$1$endc"; }
+  error()   { echo -e "$red$1$endc2" 2>/dev/null; }
+
+
+  if [[ $spt_arg == all ]]; then
+    read -rp 'Delete all scripts? type YES to confirm: ' ANS; echo
+    [[ $ANS != YES ]] && info 'Deletion canceled.' && return 1
+    [[ -e $SCRIPTS_DIR/$SPT_THIS ]] && mv $SPT_PATH /tmp
+    if rm -fv $SCRIPTS_DIR/*; then
+      rm -f $SCRIPTS_BUP/* $SPT_ENUM_FILE
+      success "All scripts have been successfully deleted."
+    else
+      error "Deletion failed."
+      status=1
+    fi
+    test -e /tmp/$SPT_THIS mv $_ $SCRIPTS_DIR
+    return $status
+  else
+    if [[ $confirm == once && $spt_argc -gt 1 ]]; then # if there's only one script to delete, confirmation can be requested within the for loop instead
+      read -N1 -p "delete $spt_argc scripts? (y/n) " ANS; echo
+      [[ ${ANS,,} != y ]] && info 'deletion canceled' && return 1
+    fi
+  fi
+
+  for sptfile in ${SPT_CMD_ARGS[@]}; do
+    status=0
+    get_filename &>/dev/null || continue
+    if [[ ${#sptpaths[@]} -eq 0 ]]; then
+      status=1
+      error "cannot delete $sptfile: pattern not found"
+      continue
+    fi
+
+    for sptfile in ${sptpaths[@]}; do
+      sptpath=$SCRIPTS_DIR/$sptfile
+      [[ ! -f $sptpath ]] && error "cannot delete $sptfile: no such script"   && status=1                    && continue
+      $confirm_all        && read -N1 -p "delete script $sptfile? (y/n) " ANS && echo && [[ ${ANS,,} != y ]] && continue
+
+      sptnum=${SPT_ENUM_NUMBERS[$sptfile]}
+      if (cd $SCRIPTS_DIR && IFS=' ' rm -f ${SPT_ENUM_SCRIPTS[$sptnum]}) && # deletes script, all links to it, and all backups
+         (cd $SCRIPTS_BUP && IFS=' ' rm -f ${SPT_ENUM_SCRIPTS[$sptnum]})
+      then
+        spt_enumdb_clear $sptnum
+        SPT_ENUM_NES=$sptnum
+        SPT_ENUM_SCRIPTS[$sptnum]=$SPT_ENUM_EMPTY
+        SPT_ENUM_NUMBERS[$SPT_ENUM_EMPTY]=$SPT_ENUM_NES
+
+        success "deleted $sptfile (enum #$sptnum)"
+      fi
+    done
+  done
+
+  return $status
+}
+
+
+# =========================== RENAME AND LINK ===========================
+
+spt_rename() {
+  local sptname newname sptnum pairs=$#
+
+  while (( pairs > 0 )); do
+    sptname=$1 newname=$2
+    [[ -z $newname ]] && sptname=$SPT_THIS newname=$1 || { sptname=$(get_filename $1) || continue; }
+
+    if mv -v $SCRIPTS_DIR/{$sptname,$newname}; then
+      mv -v $SCRIPTS_BUP/{$sptname,$newname}
+      sptnum=${SPT_ENUM_NUMBERS[$sptname]}
+      spt_enumdb_rename $sptnum $sptname $newname
+    fi
+
+    shift 2
+    (( pairs -= 2 ))
+  done
+}
+
+spt_link() {
+  local -a lnflags
+  local force=${SPTCFG[link/force]} symbolic=${SPTCFG[link/symbolic]} symchain=${SPTCFG[link/symchain]} mode=link
+  local sptname lnkname status sptnum
+
+  while spt_getopt 'fforce;oonelink;ssymbolic;lhard;cchain;Cno-chain;uunlink' $@; do
+    case $spt_opt in
+      f) force=true;;
+      o) force=false;;
+      s) symbolic=true;;
+      l) symbolic=false;; # -h cannot be used for --hard because -h is already for command help
+      c) symchain=true;;
+      C) symchain=false;;
+      u) mode=unlink;;
+    esac
+  done
+
+  $force    && lnflags+=(-f)
+  $symbolic && lnflags+=(-s)
+  $symchain && lnflags+=(-n)
+
+  if [[ $mode == link ]]; then
+    spt_argi=0
+    while (( spt_argi < spt_argc - 1 )); do
+      sptname=${SPT_CMD_ARGS[$((spt_argi++))]}
+      lnkname=${SPT_CMD_ARGS[$((spt_argi++))]}
+      [[ -z $lnkname ]] && spt_error "Error: no link specified for scriptfile $sptname; ignoring..." && status=1 && continue
+      get_filename $sptname; sptname=${sptpaths[0]}
+      if ln ${lnflags[@]} $sptname $SCRIPTS_DIR/$lnkname &&
+         ln ${lnflags[@]} $sptname $SCRIPTS_BUP/$lnkname
+      then
+        sptnum=${SPT_ENUM_NUMBERS[$sptname]}
+        sptname=${SPT_ENUM_SCRIPTS[$sptnum]}
+        SPT_ENUM_NUMBERS[$lnkname]=$sptnum
+        SPT_ENUM_SCRIPTS[$sptnum]+=" $lnkname"
+        sed -ri "$((sptnum+1)) s/$sptname/$sptname $lnkname/" $SPT_ENUM_FILE
+        status=0
+      else
+        status=1
+      fi
+    done
+  else
+    for lnkname in ${SPT_CMD_ARGS[@]}; do
+      sptpath=$SCRIPTS_DIR/$lnkname
+      if $symbolic && [[ ! -L $sptpath ]]; then
+        spt_warn "(unlink mode): $lnkname: not a symbolic link; ignoring..."; status=1
+      elif ! $symbolic && [[ -L $sptpath ]]; then
+        spt_warn "(unlink mode): $lnkname: not a hard link; ignoring..."; status=1
+      else
+        if unlink $sptpath && unlink $SCRIPTS_BUP/$lnkname; then
+          status=0
+	  sptnum=${SPT_ENUM_NUMBERS[$lnkname]}
+          sptname=${SPT_ENUM_SCRIPTS[$sptnum]}
+	  unset SPT_ENUM_NUMBERS\[$lnkname\]
+	  SPT_ENUM_SCRIPTS[$sptnum]=${sptname/ $lnkname/}
+	  sed -ri "$((sptnum+1)) s/ $lnkname//" $SPT_ENUM_FILE
+        else
+          status=1
+	fi
+      fi
+    done
+  fi
+
+  return $status
+}
+
+
+# =========================== LIST AND VIEW ===========================
+
+spt_list() {
+  local -a opts=(-l --date=relative) dirs matches dirc
+  local dir=${SPTCFG[list/dir]} sort=${SPTCFG[list/sort]} pattern
+
+  while spt_getopt 'sscripts;bbackup;Bboth;nname;dadate;Drdate' $@; do
+    case $spt_opt in
+      s) dir=scripts;;
+      b) dir=backup;;
+      B) dir=both;;
+      n) sort=name;;
+      d) sort=date-abs;;
+      D) sort=date-rel;;
+    esac
+  done
+
+  [[ $dir =~ (scripts|both) ]] && dirs=($SCRIPTS_DIR)
+  [[ $dir =~ (backup|both)  ]] && dirs+=($SCRIPTS_BUP)
+  dirc=${#dirs[@]}
+
+  case ${sort:5} in
+    abs) opts+=(--sort=time "--date=+%a %d %b %Y, %H:%M" --reverse);;
+    rel) opts+=(--sort=time --reverse);;
+  esac
+
+  if test -n "$spt_arg"; then
+    if spt_isnum $_ || spt_isrange $_; then
+      spt_enum_get $_ pattern
+      for ((i=0; i<dirc; ++i)); do
+        matches+=(${dirs[$i]}/$pattern)
+      done
+    else
+      pattern="$_"
+      local singledir=true
+      (( dirc > 1 )) && singledir=false
+      for ((i=0; i<dirc; ++i)); do
+        cd ${dirs[$i]} || return 1
+        IFS=' ' matches=($(echo *$pattern*))
+        [[ ${#matches[@]} -gt 0 ]] && break
+
+        local msg="no match for \"$pattern\""
+        $singledir || msg+=" in ${PWD/$SCRIPTS_DIR/\$SCRIPTS_DIR}"
+        spt_error $msg
+        return 1
+      done
+    fi
+
+    dirs=(${matches[@]})
+  fi
+
+  exec lsd "${opts[@]}" ${dirs[@]}
+}
+
+spt_view() {
+  local -a viewer sptpaths
+  local mode=${SPTCFG[view/mode]}
+
+  while spt_getopt 'Lleast;lless;mmore;Mmost' $@; do
+    case $spt_opt in
+      L) mode=simple;;
+      l) mode=paged;;
+      m) mode=color;;
+      M) mode=pagedcolor;;
+    esac
+  done
+
+  case $mode in
+    simple)     viewer=(cat);;
+    paged)      viewer=(less -FR);;
+    color)      viewer=(bat --style=plain --paging=never);;
+    pagedcolor) viewer=(bat --style=full  --paging=auto);;
+  esac
+
+  if [[ -z $spt_arg ]]; then
+    ${viewer[@]} $SPT_PATH
+  else
+    cd $SCRIPTS_DIR || return 1
+    if [[ $spt_arg == all ]]; then
+      ${viewer[@]} -- *
+    else
+      for sptfile in ${SPT_CMD_ARGS[@]}; do
+        get_filename || continue
+        if [[ ${#sptpaths[@]} -eq 0 ]]; then
+          spt_error "$sptfile: pattern not found"
+        else
+          ${viewer[@]} ${sptpaths[@]}
+        fi
+      done
+    fi
+  fi
+}
+
+
+
+# ======================================================================================
+# =========================== MAIN FUNCTION AND MAIN HELPERS ===========================
+# ======================================================================================
+
+
+spt_msg() {
+  local -i funclevel=2
+  [[ $1 == -e ]] && local sptcolor="$esptcolor" endcolor="$eendcolor" msgcolor="$emsgcolor" && shift
+  local colorcode=$1 msg="$2"
+  [[ $2 == --up ]] && { [[ $3 =~ ^[0-9]+$ ]] && funclevel+=$3 msg="$4" || funclevel+=1 msg="$3"; }
+  printf "$sptcolor%s $endcolor[at %s]: $msgcolor%s$endcolor\n" $SPT_THIS ${FUNCNAME[$funclevel]} $colorcode "$msg"
+}
+
+spt_error() { spt_msg -e "$red" "$@" >&2; }
+spt_die()   { spt_msg -e "$red" "$@" >&2 && exit 1; }
+spt_debug() { spt_msg -e "$grn" "DEBUG: $1" >&2 && exit 1; }
+spt_warn()  { spt_msg "$ylw" "$@"; }
+
+spt_is_file_empty() {
+  stat $1
+  (( ${STAT[size]} == 0 )) && return 0
+  local IFS=''
+  [[ -z $(cat $1) ]]
+}
+
+spt_main() {
+  # =========================== INITIALIZATION OF THE CORE VARIABLES ===========================
+  shopt -s nullglob
+  IFS=$'\n'
+  declare SPT_RERUN=false
+  if [[ -v SPT_THIS ]]; then SPT_RERUN=true; fi
+
+  $SPT_RERUN || declare SPT_PATH=$0 SPT_THIS=$(basename $0) SPT_THIS_NUMBER SPT_VERSION=1.1 SPT_VDATE="August 13th, 2026" SPT_AUTHOR="Paulo A. Lacerda (pauloaug.dev@proton.me)"
+  [[ -z $1 ]] && spt_usage && exit
+
+  declare -g sptcolor  msgcolor=%s%s  endcolor  istty_in=false istty_out=false
+  declare -g sptecolor emsgcolor=%s%s eendcolor istty_err=false
+  declare -g red grn ylw blu
+
+  tty -s <&0 && istty_in=true
+  tty -s <&1 && istty_out=true grn=32 ylw=33 blu=34  sptcolor="\e[0;34m"  msgcolor="\e[1;%sm%s"  endcolor="\e[0m"
+  tty -s <&2 && istty_err=true grn=32 red=31 blu=34 esptcolor="\e[0;34m" emsgcolor="\e[1;%sm%s" eendcolor="\e[0m"
+
+  # =========================== BUILTIN LOADING ===========================
+
+  if ! $SPT_RERUN; then
+    enable -f /usr/lib/bash/stat     stat
+    enable -f /usr/lib/bash/basename basename
+    enable -f /usr/lib/bash/dirname  dirname
+    enable -f /usr/lib/bash/unlink   unlink
+    enable -f /usr/lib/bash/sleep    sleep
+  fi
+
+  # =========================== CONFIGURATION FILE ===========================
+
+  if ! $SPT_RERUN; then
+    declare SPT_DEFAULT_CONFIG_FILE=~/.config/spt.conf
+    [[ -v SPTCFG_FILE ]] || declare SPTCFG_FILE=$SPT_DEFAULT_CONFIG_FILE
+    stat -A SPTCFG_STAT $SPTCFG_FILE
+    declare -A SPTCFG; declare -a SPTCFG_NAMES # unordered and ordered
+    sptcfg_load
+  fi
+
+  # =========================== SCRIPTS DIRECTORY ===========================
+
+  [[ -v  SCRIPTS_DIR ]] || declare SCRIPTS_DIR=${SPTCFG[path/spts-origdir]}
+  [[ -e $SCRIPTS_DIR ]] || spt_die "$SCRIPTS_DIR: no such file or directory"
+  [[ -d $SCRIPTS_DIR ]] || spt_die "$SCRIPTS_DIR: not a directory"
+
+  declare SCRIPTS_BUP=${SPTCFG[path/spts-bkupdir]}
+  if [[ -n $SCRIPTS_BUP ]] && [[ ! -e $SCRIPTS_BUP || ! -d $SCRIPTS_BUP ]]; then
+    spt_error "$SCRIPTS_BUP: invalid scripts-backup directory; ignoring..."
+    unset SCRIPTS_BUP
+  fi
+
+  declare SCRIPTS_DIR_PERMS=${SPTCFG[perms/spts-origdir]} SCRIPTS_BACKUP_DIR_PERMS=${SPTCFG[perms/spts-bkupdir]}
+
+  # =========================== MANAGER'S COMMAND LINE ===========================
+
+  declare -g SPT_CMD=$1 SPT_NOSCRIPTS=false; shift
+  declare -ga SPT_ARGS=($@) SPT_SCRIPTNAMES=($(ls $SCRIPTS_DIR))
+  declare -gA SPT_INODES
+  declare -g SPT_COUNT=${#SPT_SCRIPTNAMES[@]}
+
+  if [[ $SPT_COUNT -eq 0 ]]; then
+    SPT_NOSCRIPTS=true
+    [[ $SPT_CMD =~ (config|edit|enum|enumgen|help|usage|version) ]] || spt_die "No scripts available in $SCRIPTS_DIR."
+  else
+    while IFS=' ' read inode sptfile; do SPT_INODES[$inode]=$sptfile; done < <(ls -i $SCRIPTS_DIR | sort)
+  fi
+
+  # =========================== ENUMERATORS AND THEIR FILE ===========================
+
+  declare -a SPT_ENUM_SCRIPTS
+  declare -A SPT_ENUM_NUMBERS
+
+  declare -i SPT_ENUM_INC=50 # increment of the upper limit when it is reached
+  declare -i SPT_ENUM_MAX=0  # current upper limit (a multiple of the increment)
+  declare -i SPT_ENUM_CNT=0  # current number of non-empty enums
+  declare -i SPT_ENUM_NES    # next empty slot
+
+  declare SPT_ISNUM=false SPT_ISRANGE=false
+
+  # the non empty-string symbol that represents an empty enum slot
+  # no script can have this name because it is the path component separator
+  declare SPT_ENUM_EMPTY=/
+  declare SPT_ENUM_FILE=${SPTCFG[path/enum-mapping]}
+
+  if   [[   -z $SPT_ENUM_FILE ]]; then spt_die 'Enums file path (path/enum-mapping config) not set in configuration file.'
+  elif [[ ! -e $SPT_ENUM_FILE ]]; then spt_enumdb_generate -e "does not exist; creating it..."
+  elif [[ ! -f $SPT_ENUM_FILE ]]; then spt_die "Error: $SPT_ENUM_FILE is not a file."
+  elif spt_is_file_empty $SPT_ENUM_FILE; then spt_enumdb_generate -e "is empty; generating enums to populate it..."
+  else spt_enumdb_load; fi # initialize the SPT_ENUM variables above
+  ((--SPT_ENUM_MAX))
+
+  # =========================== COMMAND EXECUTION ===========================
+
+  case $SPT_CMD in
+    del|edit|enum|link|list|view|config|rename) spt_$SPT_CMD ${SPT_ARGS[@]};; # argument-taking commands
+    perms|sync|help|usage) spt_$SPT_CMD;; # argumentless commands
+    enumgen) spt_enumdb_generate;;
+    version)
+      echo "ScriPTs Manager (spt) v$SPT_VERSION ($SPT_VDATE) by $SPT_AUTHOR"
+      exit
+      ;;
+    *)
+      spt_help -e "Error: $SPT_CMD: invalid command"
+      exit 1
+      ;;
+  esac
+}
+
+spt_main $@

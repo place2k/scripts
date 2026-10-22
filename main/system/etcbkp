@@ -1,0 +1,106 @@
+#!/usr/bin/bash
+
+[[ $(id -u) -eq 0 ]] && exec sudo -u paulo $0 $@
+
+error() { echo "$(basename $0): $1" >&2; }
+fatal_error() { error "$1"; exit 1; }
+rel_error() { error "$rel: $1"; }
+
+[[ -z $QBETC ]] && fatal_error '$QBETC is not set'
+[[ -z $1     ]] && fatal_error 'No subpath or option given'
+
+declare MODE=backup
+declare -a CMD
+
+if [[ ${1:0:1} == - ]]; then
+  case $1 in
+    -r) MODE=restore;;
+    -d) MODE=delete;;
+    -s) MODE=sync;;
+    -h|*)
+      echo "Usage: $(basename $0) [-r|-d|-s|-h] [subpath]..."
+      echo '-r              restore the given backed-up subpaths (or all of them if none is given) to /etc'
+      echo '-d              delete the given subpaths from the $QBETC backup (their corresponding original subpaths in /etc are not touched)'
+      echo '-s              synchronize the backup at $QBETC, copying the corresponding changed files from /etc into it'
+      echo '-h              show this help message and exit'
+      echo '(no option)     if only an /etc subpath is given, it will be backed up to $QBETC'
+      echo '[subpath]...    one or more pathnames relative to /etc; if prefixed with /etc, the prefixed is removed before backup takes place'
+      exit 1
+      ;;
+  esac
+  shift
+fi
+
+check_subpath() {
+  rel="$(tr -s / <<< $rel)"
+  [[ "${rel:0:5}" == /etc/ ]] && rel="${rel:5}"
+  [[ ${rel:0:1} == - && ! -e /etc/"$rel" ]] && rel_error "should be a subpath, not a commandline option" && return 1
+  return 0
+}
+
+exists_under_QBETC() {
+  if [[ ! -e "$QBETC/$rel" && ! -L "$QBETC/$rel" ]]; then
+    rel_error "not found under $QBETC"
+    return 1
+  else
+    return 0
+  fi
+}
+
+RSYNC=(sudo rsync --progress -uha --no-D --mkpath -c --checksum-choice=sha1 --inplace --fsync -U)
+
+case $MODE in
+  backup)
+    for rel; do
+      check_subpath || continue
+      [[ ! -e "/etc/$rel" ]] && rel_error "not found under /etc" && continue
+      [[   -r "/etc/$rel" ]] && CMD=(cp) || CMD=(sudo cp)
+
+      ( cd /etc && ${CMD[@]} -rau --parents "$rel" "$QBETC" )
+
+      test ! -O "$QBETC/$rel" && sudo chown -Rh paulo:paulo "$_"
+    done
+    ;;
+  restore)
+    if [[ -z $1 ]]; then
+      exec ${RSYNC[@]} "$QBETC/" /etc
+    else
+      for rel; do
+        ( check_subpath && exists_under_QBETC ) || continue
+        ${RSYNC[@]} "$QBETC/$rel" "/etc/$rel"
+      done
+    fi
+    ;;
+  delete)
+    [[ -z $1 ]] && fatal_error 'nothing to delete'
+
+    printf 'delete '
+    if (( $# == 1 )); then
+      printf '"%s"? ' "$1"
+    else
+      printf "\"%s\"" "$1"
+      for (( i=2; i<$#; ++i )); do
+        eval "printf ', \"%s\"' \$$i"
+      done
+      eval "printf ', and \"%s\"? ' \$$(($#))"
+    fi
+
+    printf '(y/n) '
+
+    read -rN1 ANS; echo
+
+    [[ ${ANS,,} != y ]] && echo 'deletion cancelled' && exit 0
+
+    for rel; do
+      { check_subpath && exists_under_QBETC; } || continue
+      rm -rv "$QBETC/$rel"
+    done
+    ;;
+  sync)
+    find $QBETC -type f -printf '%P\n' | ${RSYNC[@]} --chown paulo:paulo --delete-before --delete-missing-args --files-from - /etc "$QBETC"
+    find $QBETC -type d -empty -print -delete
+    ;;
+esac
+
+exit 0
+

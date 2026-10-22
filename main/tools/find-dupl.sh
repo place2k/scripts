@@ -1,0 +1,2 @@
+#!/usr/bin/bash
+exec find "$1" ! -empty -type f -exec md5sum {} + | sort | uniq -w32 -dD

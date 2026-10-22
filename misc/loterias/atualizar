@@ -1,0 +1,7 @@
+#!/usr/bin/bash
+cd $(dirname $0)
+for loto in megasena lotofacil lotomania; do
+  truncate -s0 $loto
+  [[ $loto != megasena ]] && curl -s http://loteriascaixa-api.herokuapp.com/api/$loto/latest | jq -r '.dezenasOrdemSorteio | join(" ")' >$loto
+  curl -s http://loteriascaixa-api.herokuapp.com/api/$loto | jq -r '.[].dezenasOrdemSorteio | join(" ")' >>$loto
+done

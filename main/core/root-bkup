@@ -1,0 +1,216 @@
+#!/usr/bin/bash
+
+RUNDIR=/run/root-bkup
+PIDFILE=$RUNDIR/pid
+RUNNING=false
+OLD_PID=0
+NID=0 # notification ID
+EXIT_CODE=0
+UMASK=022 # u=rwx,g=rx,o=rx
+
+if [[ -f $PIDFILE ]]; then
+  OLD_PID=$(cat $PIDFILE)
+  [[ -d /proc/$OLD_PID ]] && RUNNING=true
+fi
+if [[ $1 == is-running ]]; then
+  $RUNNING
+  exit
+elif ! chkroot.sh; then
+  exit 1
+fi
+
+notify() { NID=$(notify.sh 'Root Backup' "$1" id=$NID); }
+error()  { NID=$(notify.sh "Root ${2:-backup}" "$1" prio=critical id=$NID); }
+notify_new() { NID=0; notify "$@"; }
+notify_end() {
+  local operation="$1 " F='f'
+  [[ -z $1 ]] && operation='' F='F'
+  if (( EXIT_CODE == 2 )); then
+    error "$operation${F}inished with errors (see $(basename $LOGFILE_PERSIST))."
+  else
+    notify "$operation${F}inished successfully."
+  fi
+}
+
+
+$RUNNING && error "Already running (PID: $OLD_PID)" && exit 1
+umask $UMASK
+test ! -d $RUNDIR && mkdir $_
+printf %d $$ > $PIDFILE
+unset OLD_PID
+
+start_log() {
+  ln -sf $(basename $LOGFILE_PERSIST) $LOGDIR/today.log
+  LOGFILE_PERSIST=$_
+  printf '%s\n' "$(date +'[ %F %T ]')" >$LOGFILE
+}
+
+end_log() {
+  $ARCHIVE_EXISTS || sed -zr 's/\r/\n/g' $LOGFILE > $LOGFILE_PERSIST
+  rm -r $RUNDIR
+}
+
+getpwd() {
+  local hash=f11d27eddfb7838e461817d1b7f33ea86c6b53885539b52253c040dffd54e0b3b83cfc1489813c88a07cf88bc2ac05815775e9871e088631c38cc90c777a8c59 # SHA-512
+  if [[ ! -v PASSWORD ]]; then
+    declare -g PASSWORD
+    if $GUI_RUNNING; then
+      PASSWORD="$(t2dbar kwallet-query -f root-bkup -r borg_passphrase Default)"
+    else
+      read -rsp 'Enter password: ' PASSWORD; echo
+    fi
+  fi
+
+  if hashcmp -Sn - $hash <<< "$PASSWORD"; then
+    error 'Repo password is incorrect'
+    exit 1
+  fi
+}
+
+delpwd() {
+  PASSWORD="$( (cat /dev/urandom | tr -dc '[:print:]' | head -c ${#PASSWORD}) 2>/dev/null )"
+  unset PASSWORD
+}
+
+check_for_sysupgrade() {
+  local UPGRADE_SCRIPT=sysupgrade
+  if pgrep -f $UPGRADE_SCRIPT >/dev/null; then
+    UPGRADE_FINISHED_FILE=$($UPGRADE_SCRIPT --get-finish-file)
+    notify_new 'Waiting for system upgrade to finish...'
+    until [[ -f $UPGRADE_FINISHED_FILE ]]; do
+      sleep 1
+    done
+    notify_new 'System upgrade is finished; starting system backup...'
+    return 0
+  else
+    return 1
+  fi
+}
+
+save_last_time() { local -n file=LAST_${1}_FILE; bash -c "date --date=@$TIME +%F > $file"; }
+
+count_days() {
+  local DAYS
+
+  IFS=- read -ra DATE_REF <<< $1
+  IFS=- read -ra DATE_CUR < <(date +%F)
+
+  if [[ ${DATE_CUR[0]} == ${DATE_REF[0]} ]]; then
+    if [[ ${DATE_CUR[1]} == ${DATE_REF[1]} ]]; then
+      DAYS=$((DATE_CUR[2] - DATE_REF[2]))
+#    else
+#      
+    fi
+#  else
+#    ;
+  fi
+
+  printf %d $DAYS
+}
+
+create_begin() {
+  check_for_sysupgrade || notify_new 'Starting system backup...'
+  getpwd
+  start_log
+}
+
+create_end() {
+  declare -g ARCHIVE_EXISTS=false
+  local line="$(grep -P '^Archive \d{4} already exists$' $LOGFILE)"
+  if [[ $(wc -l --total=only $LOGFILE) -eq 5 && -n "$line" ]]; then
+    ARCHIVE_EXISTS=true
+    error "$line"
+  else
+    notify_end
+  fi
+}
+
+runborg() ( exec nice -19 ionice -c3 chrt -b borg -p -v --umask $UMASK $@ <<< "$PASSWORD"; ) # run in a subshell with exec because of the homonymous function below
+
+borg() {
+  runborg $@ &>>$LOGFILE
+  EXIT_CODE=$?
+  printf '\n\n' >>$LOGFILE
+}
+
+
+BKUP_DIR=/bkup
+EXCL=$BKUP_DIR/exclusion.lst
+
+if ! [[ -e $BKUP_DIR ]]; then
+  error "Backup directory at $BKUP_DIR does not exist."
+  exit 1
+fi
+
+SPOOLDIR=/var/spool/root-bkup
+LOGDIR=/var/log/root-bkup
+
+REPO_INFO=$SPOOLDIR/repo.info
+LOGFILE_PERSIST=$LOGDIR/$(date +%d).log
+LOGFILE=$RUNDIR/log
+
+LAST_PRUNE_FILE=$SPOOLDIR/last_pruning.time
+LAST_REPOV_FILE=$SPOOLDIR/last_repo_validation.time
+LAST_DATAV_FILE=$SPOOLDIR/last_data_validation.time
+
+
+test ! -d $SPOOLDIR        && mkdir $_
+test ! -d $LOGDIR          && mkdir $_
+test ! -f $LAST_PRUNE_FILE && save_last_time PRUNE
+test ! -f $LAST_REPOV_FILE && save_last_time REPOV
+test ! -f $LAST_DATAV_FILE && save_last_time DATAV
+
+
+ONE_WEEK=$((86400*7)) # seconds
+TWO_WEEKS=$((ONE_WEEK*2))
+FOUR_WEEKS=$((TWO_WEEKS*2))
+TIME=$(date +%s)
+
+LAST_PRUNE=$(date --date=$(cat $LAST_PRUNE_FILE) +%s)
+LAST_REPOV=$(date --date=$(cat $LAST_REPOV_FILE) +%s)
+LAST_DATAV=$(date --date=$(cat $LAST_DATAV_FILE) +%s)
+
+
+export BORG_REPO=$BKUP_DIR/repo
+export BORG_PASSPHRASE_FD=0
+export BORG_CHECK_I_KNOW_WHAT_I_AM_DOING=YES
+export BORG_RELOCATED_REPO_ACCESS_IS_OK=yes
+
+enable -f /usr/lib/bash/sleep sleep
+
+
+create_begin
+borg create --exclude-from $EXCL --exclude-if-present CACHEDIR.TAG --filter AM --list -C auto,lz4 -s ::{now:%m%d} /
+create_end
+
+
+if (( TIME - LAST_PRUNE >= ONE_WEEK )); then
+  notify_new 'Starting weekly borg repository pruning and compaction...'
+  borg prune -s --list --keep-within 3m $BORG_REPO
+  borg compact $BORG_REPO
+  notify_end 'Pruning and compaction'
+  save_last_time PRUNE
+fi
+
+if (( TIME - LAST_REPOV >= TWO_WEEKS )); then
+  notify_new 'Starting borg repository validation...'
+  borg check --repair $BORG_REPO
+  notify_end 'Repository validation'
+  save_last_time REPOV
+fi
+
+if (( TIME - LAST_DATAV >= FOUR_WEEKS )); then
+  notify_new 'Starting monthly borg repository data validation...'
+  borg check --verify-data --repair $BORG_REPO
+  notify_end 'Data validation'
+  save_last_time DATAV
+fi
+
+
+line=------------------------------------------------------------------------------
+( runborg info $BORG_REPO | tail -n+6 && echo $line ) >$REPO_INFO 2>>$LOGFILE
+delpwd
+end_log
+
+exit $EXIT_CODE
+

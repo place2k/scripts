@@ -1,0 +1,17 @@
+#!/bin/sh
+
+chkroot.sh || exit 1
+
+LISTS=(/etc/package-lists/{official,aur})
+OPTS=(-n -m)
+TEMP=/tmp/.pkglist
+
+for ((i=0; i<2; i++)); do
+  OPT=${OPTS[$i]}
+  LIST=${LISTS[$i]}
+
+  pacman -Qeq $OPT > $TEMP
+  hashcmp -n $TEMP $LIST && cp $TEMP $LIST && etcbkp $_
+done
+
+unlink $TEMP

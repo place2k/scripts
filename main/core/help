@@ -1,0 +1,33 @@
+#!/usr/bin/bash
+
+[[ -z $1           ]]        && echo 'No command given.'                 >&2 && exit 1
+[[ $1 == nocorrect ]]        && shift
+! command -v "$1" >/dev/null && echo "$(basename $0): \"$1\" not found." >&2 && exit 1
+
+# List of troublesome programs (which might e.g. exit with a nonzero status code after printing a help message);
+# they present a problem for the loop after the one below which depends on the exit status
+# of the program whose output is given to HELP_MSG; if the program exits with a failure code, less(1) won't be executed.
+# Here, we assume the --help flag to be supported by all of these programs and used to print their help message.
+TROUBLESOME_PROGRAMS=(inotifywait ping checkservices xxd jmtpfs killall)
+
+for name in ${TROUBLESOME_PROGRAMS[@]}; do
+  [[ $1 == $name ]] && exec less < <($name --help 2>&1)
+done
+
+declare -a PROG_CMD=($@) HELP_OPTS=(--help -h -? --usage)
+declare HELP_MSG
+
+for opt in --help -h --usage '-?' help; do
+  HELP_MSG="$(${PROG_CMD[@]} $opt 2>&1)" && exec less <<< "$HELP_MSG"
+done
+
+if HELP_MSG="$(builtin help $1 2>&1)" ||
+   HELP_MSG="$(man $1)"               ||
+   HELP_MSG="$(man -k $1)"
+then
+  exec less <<< "$HELP_MSG"
+else
+  echo "Could not find help for $1." >&2
+  exit 1
+fi
+

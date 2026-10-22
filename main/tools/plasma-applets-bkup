@@ -1,0 +1,5 @@
+#!/usr/bin/bash
+SRC=$HOME/.config/plasma-org.kde.plasma.desktop-appletsrc
+DST=$QB/configuration/plasma
+[[ ${1,,} != exit ]] && exec cp $SRC $DST
+cp $SRC $DST && exec kill -HUP $PPID

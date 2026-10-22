@@ -1,0 +1,247 @@
+#!/usr/bin/bash
+
+notify() { notify.sh 'App Data Backup' ${APP^} icon=$APP prio=$1 "${@:2}"; }
+
+die() {
+  notify critical "$1"
+  exit 1
+}
+
+run() {
+  local COMMAND OUT STATUS CMDERR ERRFILE FIRST_VAR_NAME OUTFILE
+  local EXIT_ON_ERROR=true READVARS=false REDIRECT=false
+  local -n FIRST_VAR
+
+  while [[ ${1:0:1} == - ]]; do
+    case ${1:2} in
+      wait) COMMAND='wait4conn.sh ';;
+      notify) EXIT_ON_ERROR=false;;
+      read) READVARS=true;;
+      redir) REDIRECT=true;;
+      errnull) ERRFILE=/dev/null;;
+    esac
+    shift
+  done
+
+  COMMAND="$COMMAND$1"
+
+  if test -n "$3"; then
+    FIRST_VAR_NAME=$_
+    if $REDIRECT; then
+      [[ -v $FIRST_VAR_NAME ]] && { FIRST_VAR=$FIRST_VAR_NAME; OUTFILE=$FIRST_VAR; } || OUTFILE=$3
+    else
+      FIRST_VAR=$FIRST_VAR_NAME
+    fi
+  fi
+
+  [[ -z $ERRFILE ]] && ERRFILE=$(make_temp)
+
+  if $REDIRECT; then
+    eval "$COMMAND >$OUTFILE 2>$ERRFILE"
+  else
+    OUT="$(eval "$COMMAND 2>$ERRFILE")"
+  fi
+
+  STATUS=$?
+  CMDERR="$(cat $ERRFILE)"
+  ISWARN=false
+
+  if [[ "${CMDERR^^}" == *WARNING* || "${OUT^^}" == *WARNING* ]]; then
+    ISWARN=true
+    unset CMDERR OUT
+  elif (( STATUS )) || [[ -n "$CMDERR" ]]; then
+    local ERR_MSG="$2"
+    [[ -z "$CMDERR" ]] && CMDERR="$OUT"
+    ERR_MSG+=$"\n$CMDERR"
+    notify critical "$ERR_MSG"
+    (( STATUS )) && $EXIT_ON_ERROR && exit $STATUS
+  fi
+
+  if ! $REDIRECT; then
+    if $READVARS; then
+      read -r ${@:3} <<< "$OUT"
+    elif [[ -n "$OUT" ]]; then
+      if [[ -n $3 ]]; then
+        test ! -v $FIRST_VAR_NAME && declare -g $_
+        FIRST_VAR="$OUT"
+      else
+        notify normal "$OUT"
+      fi
+    fi
+  fi
+
+  (( STATUS )) && $ISWARN && return 0
+  return $STATUS
+}
+
+gpg() {
+  local -a ARGS=(-c --cipher-algo=AES256 --digest-algo=SHA512 --compress-algo=zip -z9) 
+  [[ $1 == decrypt ]] && ARGS=(-d) && shift
+  local infile=$1 outfile=$2
+  command gpg ${ARGS[@]} --passphrase-fd=0 --yes --batch -o $outfile $infile
+}
+
+save() {
+  local new_archive=$1 name=$2
+  local old_archive=$(make_temp)
+  local dst=$DST/$name.gpg
+  local ERRMSG=$"[save archive] Error: GPG failed.\nCheck whether the password is correct or $DST exists."
+  read -r password
+  local oldcontent_tmp=$(make_temp)
+  local newcontent_tmp=$(make_temp)
+
+  run --notify 'gpg decrypt $dst $old_archive <<< $password' "$ERRMSG" || return 1
+  unzip -p $old_archive > $oldcontent_tmp
+  unzip -p $new_archive > $newcontent_tmp
+  # save only if the file has not changed since the last time it was saved
+  run --notify 'if hashcmp -n $oldcontent_tmp $newcontent_tmp; then gpg $new_archive $dst <<< $password; fi' "$ERRMSG" || return 1
+}
+
+make_temp() {
+  local TEMP TEMPLATE=XXXXXXXXXXXX
+  local -a FLAGS
+  [[ $1 == dir  ]] && FLAGS+=(-d) && shift
+  [[ $1 == name ]] && FLAGS+=(-u) && shift
+  [[ $1 == here ]] || TEMPLATE=/tmp/$TEMPLATE
+  TEMP=$(mktemp ${FLAGS[@]} $TEMPLATE)
+  echo $TEMP >> $TEMPS_LIST
+  printf %s $TEMP
+}
+
+secretservice() {
+  local keys=.$1 && shift
+  for key; do keys+="+\" \"+.$key"; done
+  kwallet-query -f appdata-bkup -r $APP Default | jq -r "$keys"
+}
+
+shred_paths() {
+  local TEMP
+  for TEMP; do
+    if [[ -e $TEMP ]]; then
+      if test -d $TEMP; then
+        shred_paths $_/*
+        rmdir $TEMP
+      else
+        shred -uzn3 $_
+      fi
+    fi
+  done
+}
+
+atexit() { EXIT_COMMANDS+=("$*"); }
+
+APP=$1
+DST=$QB/configuration/app-data
+
+[[ -v QB ]] || die 'Error: $QB is not defined.'
+
+shopt -s nullglob
+
+declare CLEANUP_OPT=--clean-up
+declare -a EXIT_COMMANDS=('shred_paths $TEMPS_LIST $(cat $TEMPS_LIST)') TEMPS_LIST=/tmp/appdata-bkup-$$.temps
+
+trap 'for COMMAND in "${EXIT_COMMANDS[@]}"; do eval "$COMMAND" || continue; done' EXIT
+
+if [[ $1 == -d ]] || [[ $1 == $CLEANUP_OPT ]]; then # debug mode
+  PATHNAME=appdata-bkup-debug
+  SYMLINK=$PATHNAME.log
+  DEBUG_LOG=$PATHNAME.$$.log
+  APP=$2
+
+  ln -sf $(basename $DEBUG_LOG) $SYMLINK
+
+  if [[ $1 == $CLEANUP_OPT ]] || [[ $2 == $CLEANUP_OPT ]]; then
+    [[ $2 == $CLEANUP_OPT ]] && atexit shred_paths $PATHNAME*
+    exit 0
+  fi
+
+  atexit bat $DEBUG_LOG
+
+  if [[ $2 == -l ]]; then
+    if [[ -f $SYMLINK ]]; then
+      DEBUG_LOG=$SYMLINK
+      exit 0
+    else
+      atexit echo 'No log has been written yet.' '>&2'
+      exit 1
+    fi
+  fi
+
+  unset PATHNAME SYMLINK
+  exec 3>$DEBUG_LOG
+  PS4='$LINENO: '
+  BASH_XTRACEFD=3
+  set -ex
+fi
+
+
+if [[ $APP == bitwarden ]]; then
+  ask_for_password() {
+    local title='Bitwarden Vault Backup'
+    MASTER=$(kdialog --title "$title" --password 'Enter the master password') || exit 1
+    until hashcmp -b - $MASTER_HASH <<< "$MASTER"; do
+      MASTER=$(kdialog --title "$title" --password 'Wrong master password') || exit 1
+    done
+  }
+
+  retrieve_password() {
+    run --notify 'secretservice master' 'Failed to retrieve master password' MASTER && \
+      run --notify 'hashcmp -b - $MASTER_HASH <<< $MASTER' 'Error: Master password from the wallet is incorrect'
+  }
+
+  has_a_week_passed() {
+    local LASTDAY_FILE=$HOME/.cache/vault-backup.last-day
+    local last_day=$(cat $LASTDAY_FILE) today=$(date +%-d) dayspan
+    (( today < last_day )) && let last_day-=31
+    let dayspan=today-last_day
+    (( dayspan >= 7 )) && printf %d $today >$LASTDAY_FILE
+  }
+
+  if ! command -v bw >/dev/null; then
+    die 'bw is not installed.'
+  elif ! bw --quiet login --check 2>/dev/null; then
+    run --read 'secretservice client_id client_secret' 'Failed to retrieve API keys:' ID SEC
+    run --wait 'bw login --apikey <<< $"$ID\n$SEC"' 'Could not log in:'
+    unset ID SEC
+  fi
+
+  declare MASTER_HASH=99b09b04adcf552d920a6a84c8f588c0441912883d05e5e2b8cb9103f0fd0681e4d4d26dc7a4ab0a9bd19a1a21645517e6c5d921a9c5d378f77a9251963ed1d0
+
+  has_a_week_passed || ! retrieve_password && ask_for_password # if a week has passed, the password must be typed in so that I don't forget it
+
+  cd $(make_temp dir)
+
+  run --wait --errnull 'bw --quiet sync' 'Vault sync error'
+  # both csv and json are used in case I ever use another password manager and it accepts one format but not the other
+  # bw's stderr is redirected to /dev/null to avoid the useless "Master password [hidden]: " output
+  run --redir --errnull 'bw --raw export --format json <<< $MASTER' 'JSON vault export error' vault.json
+  run --redir --errnull 'bw --raw export --format  csv <<< $MASTER'  'CSV vault export error' vault.csv
+
+  VAULTNAME=bitwarden-vault.zip ARCHIVE=$(make_temp name here).zip
+  run "zip -q0 $ARCHIVE vault.json vault.csv"    'Could not archive vault'
+  run "save    $ARCHIVE $VAULTNAME <<< \$MASTER" 'Could not save vault backup'
+elif [[ $APP == todoist ]]; then
+  api_error() {
+    local arg="$1" piper=echo
+    [[ "$1" == -f ]] && arg="$2" piper=cat
+    die "$($piper "$arg" | jq -r '"API Error \(.error_code): \(.error)."')"
+  }
+
+  run --read 'secretservice master_token oauth_token' 'Failed to retrieve API access token:' MASTER_TOKEN OAUTH_TOKEN
+
+  AUTH_HEADER='Authorization: Bearer'
+  AUTH_LIST="$AUTH_HEADER $OAUTH_TOKEN" AUTH_DOWNLOAD="$AUTH_HEADER $MASTER_TOKEN"
+  CURL='curl --no-progress-meter -L'
+
+  ZIPNAME=todoist.zip ARCHIVE=$(make_temp)
+
+  run --wait '$CURL -H "$AUTH_LIST" https://api.todoist.com/api/v1/backups' 'Backup list download failed!' BACKUPS
+  [[ ${BACKUPS:0:1} == { ]] && api_error "$BACKUPS" || run 'jq -r ".[0].url" <<< "$BACKUPS"' 'Error parsing backups list JSON' BACKUP_URL
+
+  run --wait --redir '$CURL -H "$AUTH_DOWNLOAD" "$BACKUP_URL"' 'Backup archive download failed!' ARCHIVE
+  [[ "$(file -b $ARCHIVE | cut -d' ' -f1)" == JSON ]] && api_error -f $ARCHIVE
+
+  run 'save $ARCHIVE $ZIPNAME <<< $MASTER_TOKEN' 'Could not save backup archive'
+else
+  die "Invalid app name; must be either bitwarden or todoist."
+fi

@@ -1,0 +1,20 @@
+#!/bin/zsh
+
+xhd() { /usr/bin/sudo /usr/bin/xhd.sh -$1 }
+
+wait_exit=true
+[[ $1 == --nowait ]] && wait_exit=false && shift
+PROG=$1 && shift
+ARGS=$@
+command -v $PROG >/dev/null || exec die.sh "cannot run $PROG: no executable found"
+
+xhd d; xhd m || exit 1
+if $wait_exit; then
+  $PROG $ARGS &
+  pidwait -p $!; STATUS=$?
+  xhd u || exit 1
+  exit $STATUS
+else
+  ( sleep 3; xhd u || exit 1 ) &!
+  exec $PROG $ARGS
+fi

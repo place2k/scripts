@@ -1,0 +1,3 @@
+#!/bin/sh
+chkroot.sh || exit 1
+exec systemctl restart sddm

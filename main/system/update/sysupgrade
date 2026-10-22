@@ -1,0 +1,150 @@
+#!/usr/bin/bash
+
+REBOOT_FILE=/tmp/.reboot.after.upgrade
+FINISH_FILE=/tmp/.sysupgrade.finished
+STATUS=starting
+NID=0 # notification ID
+[[ $1 == --get-finish-file ]] && printf %s $FINISH_FILE && exit
+
+chkroot.sh --unpriv || exit 1
+
+notify() {
+  local line_num=1
+  notify.sh 'System Upgrade' "$1" icon=system-upgrade id=$NID ${@:2} | \
+    while read -r LINE; do
+      (( line_num == 1 )) && NID="$LINE" line_num=2 || echo "$LINE"
+    done
+}
+
+notify_both() {
+  notify "$@" &
+  GUI_RUNNING=false notify "$@"
+}
+
+error()  { notify "$1" prio=critical time=0 ${@:2}; }
+
+focus_window() { $GUI_RUNNING && [[ ! $(xdotool getactivewindow getwindowname) =~ ' — Konsole'$ ]] && wmctrl -a Konsole; }
+
+save_upgrade_date() {
+  local ANACRON_NAME=sysupgrade
+  local SPOOL_FILE=$HOME/.anacron/spool/$ANACRON_NAME
+  local LAST_UPGRADE=$(($(date -f $SPOOL_FILE +%s) / 86400))
+  local TODAY=$(($(date +%s) / 86400))
+  (( TODAY - LAST_UPGRADE > 3 )) && date +%Y%m%d > $SPOOL_FILE
+}
+
+check_for_sysbackup() {
+  if root-bkup is-running; then
+    notify_both 'Waiting for system backup to finish...'
+    sleep 3
+    while root-bkup is-running; do
+      sleep 1
+    done
+  fi
+}
+
+upgrade() {
+  local -a IGNORED_PACKAGES
+  while [[ $STATUS != done ]]; do
+    wait4conn.sh paru -Su ${IGNORED_PACKAGES[@]} --noconfirm
+    PARU_EXIT_CODE=$?
+
+    if (( PARU_EXIT_CODE == 0 )); then
+      save_upgrade_date
+      touch $FINISH_FILE
+      STATUS=done
+      if [[ -f $REBOOT_FILE ]]; then
+        check_for_sysbackup
+        ANS=$(error 'Reboot now?' action=y=Yes action=n=No)
+        [[ ${ANS,,} == y ]] && reboot
+      fi
+    else
+      ANS=$(error 'There was an issue with the upgrade!' action=r=Retry action=i=Igpack action=s=Shell action=q=Quit)
+      case ${ANS,,} in
+        r) ;;
+        i)
+          focus_window
+          read -rp 'Package(s) to ignore (space-separated): ' PACKAGELIST
+          for PACKAGE in $PACKAGELIST; do
+            while true; do
+              grep -q "^$PACKAGE$" /etc/package-lists/{official,aur} && break
+              echo "Error: no such package: $PACKAGE"
+              read -rp 'Type it again (or another one, or ENTER to delete): ' PACKAGE
+            done
+            test $PACKAGE && IGNORED_PACKAGES+=(--ignore $_)
+          done
+          ;;
+        q)
+          save_upgrade_date
+          touch $FINISH_FILE
+          exit $PARU_EXIT_CODE
+          ;;
+        s)
+          entersh
+          ;;
+      esac
+
+      clear
+      notify_both 'Retrying...'
+      STATUS=retrying
+    fi
+  done
+
+  notify 'Done!'
+  sudo checkservices
+}
+
+clean_up() {
+  GUI_RUNNING=false notify 'Cleaning up...'
+  test -f $REBOOT_FILE && unlink $_
+  test -f $FINISH_FILE && unlink $_
+  clear-aur-build -b
+}
+
+entersh() {
+  focus_window
+  notify_both 'Shell is ready and running'
+  ( cd /home/paulo && exec $SHELL -l )
+}
+
+restart() {
+  clear
+  notify 'Restarting...'
+  upgrade
+}
+
+pmkill() { sudo killall -${1:-TERM} paru pacman 2>/dev/null; }
+
+pause() {
+  pmkill STOP
+  notify 'Upgrade paused'
+
+  printf '\n1) Restart upgrade | 2) Start shell | 3) Resume | 0) Quit\n'
+  while true; do
+    printf '\r> '
+    read -n1 ANS
+    if [[ $ANS == [0-3] ]]; then
+      echo
+      case $ANS in
+        1) pmkill; restart; exit;;
+        2) pmkill; entersh; restart; exit;;
+        3) return;;
+        0) notify Aborted; exit;;
+      esac
+    fi
+  done
+}
+
+trap pause    INT
+trap clean_up EXIT
+
+echo '=========================================='
+echo '============= System Upgrade ============='
+echo '=========================================='
+printf '\nPress Ctrl-C to open the pause menu anytime.\n\n'
+
+
+wait4conn.sh paru -Sy
+[[ -f $REBOOT_FILE ]] | { paru -Quq | grep -q '^linux-zen$' && touch $REBOOT_FILE; }
+notify 'Starting...'
+upgrade

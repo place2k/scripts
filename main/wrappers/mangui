@@ -1,0 +1,2 @@
+#!/usr/bin/bash
+gui_running && exec konsole -e man $@ || exec man $@

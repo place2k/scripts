@@ -1,0 +1,2 @@
+#!/usr/bin/sh
+(( $(id -u) == 0 )) && exec /usr/bin/vim -u /root/.vimrc $@ || exec /usr/bin/sudo /usr/bin/vim -u /root/.vimrc $@

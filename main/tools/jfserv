@@ -1,0 +1,58 @@
+#!/usr/bin/python
+
+from atexit import register as atexit
+import http.server
+import os
+from pathlib import Path
+import re
+import socketserver
+import sys
+
+
+def get_script_mtime():
+  return os.stat(JFSCRIPT).st_mtime
+
+def fatal_error(msg):
+    print(f'FATAL ERROR: {msg}.', file=sys.stderr)
+    sys.exit(1)
+
+def remove_temp_404page():
+  if os.path.exists(HTTP404_PAGE_PATH):
+    os.remove(HTTP404_PAGE_PATH)
+
+
+JFSCRIPT          = sys.argv[0]
+JFSCRIPT_MTIME    = get_script_mtime()
+JFSCRIPT_VER      = '0.1'
+JFVERSION         = '4.4.7'
+JFROOT            = f'{Path.home()}/Media/docs/the-jargon-file-{JFVERSION}'
+PORT              = 7470 # decimal ASCII codes for 'J' and 'F' (Jargon File)
+SERVERNAME        = f'{os.path.basename(JFSCRIPT)}/{JFSCRIPT_VER}'
+HTTP404_PAGE_PATH = '/tmp/404.html'
+
+if not os.path.exists(JFROOT):
+  fatal_error(f"The server's root directory ({JFROOT}) does not exist")
+
+atexit(remove_temp_404page)
+
+
+ipathmap = {} # internal path map: subpath => server path
+redirmap = {} # redirection map: server path => subpath
+rescache = {} # cache of response headers and data
+
+class RequestPath:
+  __init__()
+
+class ResponseData:
+  __init__(self, filepath):
+    self.path = filepath
+
+class JFServ(http.server.SimpleHTTPRequestHandler):
+  def __init__(self, request, client_address, server, directory=None):
+    super().__init__(request, client_address, server, directory)
+    self.server_version = SERVERNAME
+
+  def do_GET(self):
+    filepath = self.get_file_path()
+    data     = self.get_response_data(filepath)
+    headers  = self.make_headers(data)

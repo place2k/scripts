@@ -1,0 +1,196 @@
+#!/usr/bin/bash
+
+archive() (
+  local folder=$1 JID=$2
+  local source=$HOME/${mode[src.$folder]}
+  local archive_dest=$QB/${mode[dest]}/${folder}.zip
+  local LINE=$((LINE+JID))
+  ((LINE>MAXLINE)) && echo && LINE=$((LINE-2))
+
+  test -n "${mode[precmd]}" && eval "$_"
+  if [[ $op == save ]]; then
+    test ! -e $source && mode_die "cannot archive $(sed "s|$HOME|~|" <<< $_): path does not exist"
+    cd $_; mkdir -p /tmp/$EXEC
+
+    local archive_temp=$(mktemp -u /tmp/$EXEC/XXXXXX.zip)
+    if [[ -e $archive_dest ]]; then
+      progress cp Loading $archive_dest $archive_temp 'Archive is ready; updating...'
+      sleep 2
+    else
+      log 'Creating backup archive...'
+    fi
+
+    # exclusions from .config and .local
+    local -a PY_XLIST=(__pycache__ \*.pyc \*.pyo .virtualenvs venv/\* .venv/\*)
+    local -a XLIST=(BraveSoftware/\* share/{baloo/index,Trash/\*,Steam/\*} heroic/tools/proton/\* \*{{c,C}ache,CACHE}\* \*.log)
+    ionice -c2 -n0 zip -9vyr -FS $archive_temp * -x "${XLIST[@]}" "${PY_LIST[@]}"
+
+    progress mv Saving $archive_temp $archive_dest 'Done.'
+  else
+    test ! -e $source && mkdir $_
+    log 'Restoring archived backup...'
+    ionice -c2 -n0 unzip -vo $archive_dest -d $source
+    log 'Done.'
+  fi
+  test -n "${mode[poscmd]}" && eval "$_"
+)
+
+term_move() { local l=$1 c=$2; printf "\e[${l};${c}H"; } # move to line l and column c
+term_cpos() { IFS='[;' read -p $'\e[6n' -d R -rs _ $1 $2 _; } # query current position
+
+log() { term_move $LINE $COLUMN; printf "\e[2K[%s/%s] $1\r" ${mode[name]} $folder "${@:2}"; }
+
+progress() {
+  size() { stat -c%s $1 2>/dev/null || echo 0; }
+  fmtsiz() { numfmt --to=si --suffix=B -- $@; }
+  fmtsec() {
+    local time=$1
+    if ((time<60)); then
+      printf %ds $time
+    else
+      local h=$((time/3600)) m=$((time/60%60)) s=$((time%60))
+      ((h)) && printf '%02d:' $h
+      printf '%02d:%02d' $m $s
+    fi
+  }
+
+  fmteta() { ((ETA)) && printf '%s left' $(fmtsec $ETA) || printf '...'; }
+
+  local command=$1 operation=$2 src=$3 dst=$4 endmsg=$5
+  local src_size=$(size $src) dst_size percent
+  local old_size=0 speed elapsed=1 ETA=0
+
+  $command $src $dst 2>/dev/null & sleep 0.1
+  while (( $(size $dst) == 0 )); do sleep 1; done
+
+  while true; do
+    dst_size=$(size $dst)
+    speed=$((dst_size-old_size))
+    ((speed)) && ETA=$(( (src_size-dst_size) / speed )) || ETA=0
+    percent=$(( dst_size * 100 / src_size ))
+
+    log '%s archive... %s/%s [%d%%] ( %s | %s/s | %s )' \
+      $operation $(fmtsiz $dst_size $src_size) $percent $(fmtsec $elapsed) $(fmtsiz $speed) $(fmteta)
+    sleep 1; ((++elapsed))
+    (( dst_size == src_size )) && break
+    old_size=$dst_size
+  done
+
+  wait
+  log '%s\n' "$endmsg"
+}
+
+help() {
+  echo "Usage: $EXEC [-h] bp [-f] | lc] [-h|-r|-q] [FOLDER]"
+  echo 'Archival modes (first argument):'
+  echo '  bp        archive browser profiles'
+  echo '  lc        archive ~/.local and ~/.config'
+  echo 'Folder to archive (last argument):'
+  echo "  FOLDER    case-sensitive identifying name for the folder to archive (use bp -h or lc -h for more)"
+  echo 'Common options:'
+  echo '  -h        show this help message and exit'
+  echo '  -r        restore the backup archive'\''s contents instead of saving'
+  echo '  -q        quit the parent shell (and by consequence the terminal emulator, if any) after backup or restore is finished.'
+  echo 'Specific options:'
+  echo '  bp -f     backup or restore the Flatpak browser profile instead of the regular one'
+  echo
+  echo 'If no FOLDER is given, all mode-dependent folders are backed up (or restored).'
+}
+
+mode_help() {
+  local BP=false EXTRA_OPTS SOURCES='.local and .config' NO_GIVEN=folder
+  [[ ${mode[name]} == bp ]] && BP=true EXTRA_OPTS=' -f' SOURCES='browser profiles' NO_GIVEN=browser
+
+  local OPTS=$(tr ' ' '|' <<< "-h -r -q$EXTRA_OPTS")
+  local FOLDERS=$(tr ' ' '|' <<< ${mode[folders]})
+
+  echo "Usage: $EXEC ${mode[name]} [$OPTS] [$FOLDERS]"
+  echo '  -h   show help message and exit'
+  echo "  -r   restore $SOURCES instead of saving them"
+  echo '  -q   quit the parent shell (and by consequence the terminal emulator, if any) after backup or restore is finished.'
+  if $BP; then echo '  -f   backup or restore the Flatpak browser profile instead of the regular one'; fi
+  echo "If no $NO_GIVEN is given, both will be backed up (or restored)."
+}
+
+error() { echo "$EXEC: $@." >&2; }
+die()   { error "$@"; exit 1; }
+
+mode_die() {
+  mode_help >&2
+  printf '\n%s %s: %s\n' $EXEC ${mode[name]} $1 >&2
+  exit 1
+}
+
+declare -n mode
+declare folder
+declare op=save quit=false archive_all=false
+declare EXEC=$(basename $0)
+
+declare -A bp=(
+  [folders]='brave firefox'
+  [dest]=configuration/browsers/profiles # QB-relative
+  [src.brave]=.config/BraveSoftware/Brave-Browser [src.firefox]=.mozilla/firefox/default-release
+  [precmd]='declare was_browser_running=false browser=$folder; pkill -x $browser && was_browser_running=true'
+  [poscmd]='if $was_browser_running; then $browser &>/dev/null & disown -h; fi'
+)
+
+declare -A lc=([folders]='local config' [dest]=home [src.local]=.local [src.config]=.config)
+
+IFS=$'\n'
+
+case $1 in
+  -h) help; exit 1;;
+  bp|lc) mode=$1; mode[name]=$1;;
+  *) die "$1: invalid archival mode (pick either bp or lc)";;
+esac
+shift
+
+for flag; do
+  [[ ${flag:0:1} != - ]] && break
+  for ((i = 1; i < ${#flag}; ++i)); do
+    case ${flag:$i:1} in
+      h) mode_help; exit 1;;
+      r) op=restore;;
+      q) quit=true;;
+      f)
+        if [[ ${mode[name]} != bp ]]; then
+          mode_die "-${flag:$i:1}: invalid flag"
+        else
+          bp[src.brave]=.var/app/com.brave.Browser/config
+          bp[src.firefox]=.var/app/org.mozilla.firefox
+        fi
+        ;;
+      *) mode_die "-${flag:$i:1}: invalid flag";;
+    esac
+  done
+  shift
+done
+
+IFS=' '
+declare -a folders=(${mode[folders]})
+declare f arcjob_id=0
+IFS=$'\n'
+
+case $# in
+  0) archive_all=true;;
+  1) for f in ${folders[@]}; do [[ $1 == $f ]] && folder=$1 && break; done; [[ -n $folder ]] || mode_die "$folder: invalid folder";;
+  *) mode_die "only one folder should be given";;
+esac
+
+trap "rm -rf /tmp/$EXEC" EXIT
+trap "pkill $EXEC" INT
+
+term_cpos LINE COLUMN
+term_move 9999 9999
+term_cpos MAXLINE MAXCOL
+term_move $LINE $COLUMN
+
+if $archive_all; then
+  for f in ${folders[@]}; do archive $f $arcjob_id & ((++arcjob_id)); done
+  wait
+else
+  archive $folder
+fi
+
+$quit && kill -HUP $PPID || exit 0
+

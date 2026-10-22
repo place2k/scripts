@@ -1,0 +1,2 @@
+#!/bin/zsh
+[[ -n $DISPLAY && -n $(pgrep sddm) && $(tty) != /dev/tty* ]]
