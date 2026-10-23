@@ -8,13 +8,12 @@ PROG=$1 && shift
 ARGS=$@
 command -v $PROG >/dev/null || exec die.sh "cannot run $PROG: no executable found"
 
-xhd d; xhd m || exit 1
+xhd m
 if $wait_exit; then
   $PROG $ARGS &
-  pidwait -p $!; STATUS=$?
-  xhd u || exit 1
+  pidwait -p $!; STATUS=$?; xhd u
   exit $STATUS
 else
-  ( sleep 3; xhd u || exit 1 ) &!
+  ( sleep 3 && xhd u ) &!
   exec $PROG $ARGS
 fi
