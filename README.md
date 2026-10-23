@@ -66,10 +66,11 @@ misc                                    Miscellaneous scripts used for secondary
 │   └── megasena                        Datafile for Mega Sena.
 ├── makepdf.sh                          Create OCR-enabled PDF(s) from the screenshots of a given recent AI roleplaying chat(s) that I had on Emochi.
 ├── me.sh                               Name and properly organize recently taken kinky photographs of me, preparing them to be saved to the privately encrypted archive me.7z.
+├── onetab-log-rm-dupl.py               Made and run 2 years ago to remove duplicates from my OneTab export file.
 ├── wiktpos                             Home of the wiktpos.py script and its data files (which were excluded from this Git repository for privacy and security purposes).
 │   └── wiktpos.py                      "Wiktionary Part of Speech": use the Wikimedia API to retrieve and fix my improper uses of the pos= parameter, replacing them with ng=.
 ├── youtube-brave-groups.bookmarks      Datafile for ytdurations.py, containing YouTube video IDs per browser group/bookmark-folder that contained the video tabs.
 └── ytdurations.py                      Calculate the individual and the total durations for the bookmarked videos above, so that I know how long it will take to watch each and all.
 
-12 directories, 59 files
+12 directories, 60 files
 ```
