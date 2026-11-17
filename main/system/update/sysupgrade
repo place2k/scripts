@@ -67,7 +67,7 @@ upgrade() {
           read -rp 'Package(s) to ignore (space-separated): ' PACKAGELIST
           for PACKAGE in $PACKAGELIST; do
             while true; do
-              grep -q "^$PACKAGE$" /etc/package-lists/{official,aur} && break
+              paru -Qq | grep -q "^$PACKAGE$" && break
               echo "Error: no such package: $PACKAGE"
               read -rp 'Type it again (or another one, or ENTER to delete): ' PACKAGE
             done
